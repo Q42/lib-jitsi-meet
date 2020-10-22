@@ -20,15 +20,14 @@ export default class BridgeChannel {
      * @param {RTCPeerConnection} [peerconnection] WebRTC peer connection
      * instance.
      * @param {string} [wsUrl] WebSocket URL.
-     * @param {EventEmitter} eventEmitter EventEmitter instance.
+     * @param {EventEmitter} emitter the EventEmitter instance to use for event emission.
+     * @param {function} senderVideoConstraintsChanged callback to call when the sender video constraints change.
      */
-    constructor(peerconnection, wsUrl, emitter) {
+    constructor(peerconnection, wsUrl, emitter, senderVideoConstraintsChanged) {
         if (!peerconnection && !wsUrl) {
-            throw new TypeError(
-                'At least peerconnection or wsUrl must be given');
+            throw new TypeError('At least peerconnection or wsUrl must be given');
         } else if (peerconnection && wsUrl) {
-            throw new TypeError(
-                'Just one of peerconnection or wsUrl must be given');
+            throw new TypeError('Just one of peerconnection or wsUrl must be given');
         }
 
         if (peerconnection) {
@@ -53,6 +52,8 @@ export default class BridgeChannel {
 
         // Indicates whether the connection was closed from the client or not.
         this._closedFromClient = false;
+
+        this._senderVideoConstraintsChanged = senderVideoConstraintsChanged;
 
         // If a RTCPeerConnection is given, listen for new RTCDataChannel
         // event.
@@ -198,13 +199,12 @@ export default class BridgeChannel {
      * @param {number} value The new value for lastN. -1 means unlimited.
      */
     sendSetLastNMessage(value) {
-        const jsonObject = {
+        logger.log(`Sending lastN=${value}.`);
+
+        this._send({
             colibriClass: 'LastNChangedEvent',
             lastN: value
-        };
-
-        this._send(jsonObject);
-        logger.log(`Channel lastN set to: ${value}`);
+        });
     }
 
     /**
@@ -215,9 +215,7 @@ export default class BridgeChannel {
      * or from WebSocket#send or Error with "No opened channel" message.
      */
     sendPinnedEndpointMessage(endpointId) {
-        logger.log(
-            'sending pinned changed notification to the bridge for endpoint ',
-            endpointId);
+        logger.log(`Sending pinned endpoint: ${endpointId}.`);
 
         this._send({
             colibriClass: 'PinnedEndpointChangedEvent',
@@ -234,9 +232,7 @@ export default class BridgeChannel {
      * or from WebSocket#send or Error with "No opened channel" message.
      */
     sendSelectedEndpointsMessage(endpointIds) {
-        logger.log(
-            'sending selected changed notification to the bridge for endpoints',
-            endpointIds);
+        logger.log(`Sending selected endpoints: ${endpointIds}.`);
 
         this._send({
             colibriClass: 'SelectedEndpointsChangedEvent',
@@ -250,8 +246,7 @@ export default class BridgeChannel {
      * in pixels, this receiver is willing to receive
      */
     sendReceiverVideoConstraintMessage(maxFrameHeightPixels) {
-        logger.log('sending a ReceiverVideoConstraint message with '
-            + `a maxFrameHeight of ${maxFrameHeightPixels} pixels`);
+        logger.log(`Sending ReceiverVideoConstraint with maxFrameHeight=${maxFrameHeightPixels}px`);
         this._send({
             colibriClass: 'ReceiverVideoConstraint',
             maxFrameHeight: maxFrameHeightPixels
@@ -292,9 +287,7 @@ export default class BridgeChannel {
                 obj = JSON.parse(data);
             } catch (error) {
                 GlobalOnErrorHandler.callErrorHandler(error);
-                logger.error(
-                    'Failed to parse channel message as JSON: ',
-                    data, error);
+                logger.error('Failed to parse channel message as JSON: ', data, error);
 
                 return;
             }
@@ -306,49 +299,40 @@ export default class BridgeChannel {
                 // Endpoint ID from the Videobridge.
                 const dominantSpeakerEndpoint = obj.dominantSpeakerEndpoint;
 
-                logger.info(
-                    'Channel new dominant speaker event: ',
-                    dominantSpeakerEndpoint);
-                emitter.emit(
-                    RTCEvents.DOMINANT_SPEAKER_CHANGED,
-                    dominantSpeakerEndpoint);
+                logger.info(`New dominant speaker: ${dominantSpeakerEndpoint}.`);
+                emitter.emit(RTCEvents.DOMINANT_SPEAKER_CHANGED, dominantSpeakerEndpoint);
                 break;
             }
             case 'EndpointConnectivityStatusChangeEvent': {
                 const endpoint = obj.endpoint;
                 const isActive = obj.active === 'true';
 
-                logger.info(
-                    `Endpoint connection status changed: ${endpoint} active ? ${
-                        isActive}`);
-                emitter.emit(RTCEvents.ENDPOINT_CONN_STATUS_CHANGED,
-                    endpoint, isActive);
+                logger.info(`Endpoint connection status changed: ${endpoint} active=${isActive}`);
+                emitter.emit(RTCEvents.ENDPOINT_CONN_STATUS_CHANGED, endpoint, isActive);
 
                 break;
             }
             case 'EndpointMessage': {
-                emitter.emit(
-                    RTCEvents.ENDPOINT_MESSAGE_RECEIVED, obj.from,
-                    obj.msgPayload);
+                emitter.emit(RTCEvents.ENDPOINT_MESSAGE_RECEIVED, obj.from, obj.msgPayload);
 
                 break;
             }
             case 'LastNEndpointsChangeEvent': {
-                // The new/latest list of last-n endpoint IDs.
+                // The new/latest list of last-n endpoint IDs (i.e. endpoints for which the bridge is sending video).
                 const lastNEndpoints = obj.lastNEndpoints;
 
-                logger.info('Channel new last-n event: ',
-                    lastNEndpoints, obj);
-                emitter.emit(RTCEvents.LASTN_ENDPOINT_CHANGED,
-                    lastNEndpoints, obj);
+                logger.info(`New forwarded endpoints: ${lastNEndpoints}`);
+                emitter.emit(RTCEvents.LASTN_ENDPOINT_CHANGED, lastNEndpoints);
 
                 break;
             }
-            case 'SelectedUpdateEvent': {
-                const isSelected = obj.isSelected;
+            case 'SenderVideoConstraints': {
+                const videoConstraints = obj.videoConstraints;
 
-                logger.info(`SelectedUpdateEvent isSelected? ${isSelected}`);
-                emitter.emit(RTCEvents.IS_SELECTED_CHANGED, isSelected);
+                if (videoConstraints) {
+                    logger.info(`SenderVideoConstraints: ${JSON.stringify(videoConstraints)}`);
+                    this._senderVideoConstraintsChanged(videoConstraints);
+                }
                 break;
             }
             default: {

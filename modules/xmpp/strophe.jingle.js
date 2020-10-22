@@ -1,20 +1,20 @@
 /* global $, __filename */
 
+import { getLogger } from 'jitsi-meet-logger';
+import { $iq, Strophe } from 'strophe.js';
+
 import {
     ACTION_JINGLE_TR_RECEIVED,
     ACTION_JINGLE_TR_SUCCESS,
     createJingleEvent
 } from '../../service/statistics/AnalyticsEvents';
-import { getLogger } from 'jitsi-meet-logger';
-import { $iq, Strophe } from 'strophe.js';
-
 import XMPPEvents from '../../service/xmpp/XMPPEvents';
+import Statistics from '../statistics/statistics';
 import GlobalOnErrorHandler from '../util/GlobalOnErrorHandler';
 import RandomUtil from '../util/RandomUtil';
-import Statistics from '../statistics/statistics';
 
-import JingleSessionPC from './JingleSessionPC';
 import ConnectionPlugin from './ConnectionPlugin';
+import JingleSessionPC from './JingleSessionPC';
 
 const logger = getLogger(__filename);
 
@@ -149,6 +149,9 @@ export default class JingleConnectionPlugin extends ConnectionPlugin {
             logger.info(
                 `Marking session from ${fromJid
                 } as ${isP2P ? '' : '*not*'} P2P`);
+
+            const iceConfig = isP2P ? this.p2pIceConfig : this.jvbIceConfig;
+
             sess
                 = new JingleSessionPC(
                     $(iq).find('jingle').attr('sid'),
@@ -156,7 +159,10 @@ export default class JingleConnectionPlugin extends ConnectionPlugin {
                     fromJid,
                     this.connection,
                     this.mediaConstraints,
-                    isP2P ? this.p2pIceConfig : this.jvbIceConfig,
+
+                    // Makes a copy in order to prevent exception thrown on RN when either this.p2pIceConfig or
+                    // this.jvbIceConfig is modified and there's a PeerConnection instance holding a reference
+                    JSON.parse(JSON.stringify(iceConfig)),
                     isP2P,
                     /* initiator */ false);
 
@@ -360,17 +366,26 @@ export default class JingleConnectionPlugin extends ConnectionPlugin {
 
                 const options = this.xmpp.options;
 
-                if (options.useStunTurn) {
-                    // we want to filter and leave only tcp/turns candidates
-                    // which make sense for the jvb connections
-                    this.jvbIceConfig.iceServers
-                        = iceservers.filter(s => s.urls.startsWith('turns'));
+                // Shuffle ICEServers for loadbalancing
+                for (let i = iceservers.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    const temp = iceservers[i];
+
+                    iceservers[i] = iceservers[j];
+                    iceservers[j] = temp;
                 }
 
-                if (options.p2p && options.p2p.useStunTurn) {
-                    this.p2pIceConfig.iceServers = iceservers;
+                let filter;
+
+                if (options.useTurnUdp) {
+                    filter = s => s.urls.startsWith('turn');
+                } else {
+                    // By default we filter out STUN and TURN/UDP and leave only TURN/TCP.
+                    filter = s => s.urls.startsWith('turn') && (s.urls.indexOf('transport=tcp') >= 0);
                 }
 
+                this.jvbIceConfig.iceServers = iceservers.filter(filter);
+                this.p2pIceConfig.iceServers = iceservers;
             }, err => {
                 logger.warn('getting turn credentials failed', err);
                 logger.warn('is mod_turncredentials or similar installed?');

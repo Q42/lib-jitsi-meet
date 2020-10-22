@@ -1,15 +1,16 @@
 /* global $, Promise */
 
-const logger = require('jitsi-meet-logger').getLogger(__filename);
-
+import { getLogger } from 'jitsi-meet-logger';
 import { $iq, Strophe } from 'strophe.js';
 
-const XMPPEvents = require('../../service/xmpp/XMPPEvents');
+import Settings from '../settings/Settings';
+
 const AuthenticationEvents
     = require('../../service/authentication/AuthenticationEvents');
+const XMPPEvents = require('../../service/xmpp/XMPPEvents');
 const GlobalOnErrorHandler = require('../util/GlobalOnErrorHandler');
 
-import Settings from '../settings/Settings';
+const logger = getLogger(__filename);
 
 /**
  *
@@ -203,6 +204,13 @@ Moderator.prototype.createConferenceIq = function() {
                     value: Boolean(config.enableRemb)
                 }).up();
     }
+    if (config.enableOpusRed === true) {
+        elem.c(
+                'property', {
+                    name: 'enableOpusRed',
+                    value: true
+                }).up();
+    }
     if (config.minParticipants !== undefined) {
         elem.c(
                 'property', {
@@ -214,7 +222,7 @@ Moderator.prototype.createConferenceIq = function() {
     elem.c(
         'property', {
             name: 'enableLipSync',
-            value: this.options.connection.enableLipSync !== false
+            value: this.options.connection.enableLipSync === true
         }).up();
     if (config.audioPacketDelay !== undefined) {
         elem.c(
@@ -267,6 +275,13 @@ Moderator.prototype.createConferenceIq = function() {
             value: openSctp
         }).up();
 
+    if (config.opusMaxAverageBitrate) {
+        elem.c(
+            'property', {
+                name: 'opusMaxAverageBitrate',
+                value: config.opusMaxAverageBitrate
+            }).up();
+    }
     if (this.options.conference.startAudioMuted !== undefined) {
         elem.c(
             'property', {

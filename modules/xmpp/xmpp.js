@@ -4,21 +4,22 @@ import { getLogger } from 'jitsi-meet-logger';
 import { $msg, Strophe } from 'strophe.js';
 import 'strophejs-plugin-disco';
 
-import RandomUtil from '../util/RandomUtil';
 import * as JitsiConnectionErrors from '../../JitsiConnectionErrors';
 import * as JitsiConnectionEvents from '../../JitsiConnectionEvents';
+import XMPPEvents from '../../service/xmpp/XMPPEvents';
 import browser from '../browser';
+import { E2EEncryption } from '../e2ee/E2EEncryption';
+import GlobalOnErrorHandler from '../util/GlobalOnErrorHandler';
+import Listenable from '../util/Listenable';
+import RandomUtil from '../util/RandomUtil';
+
+import Caps from './Caps';
+import XmppConnection from './XmppConnection';
 import MucConnectionPlugin from './strophe.emuc';
 import JingleConnectionPlugin from './strophe.jingle';
-import initStropheUtil from './strophe.util';
-import PingConnectionPlugin from './strophe.ping';
-import RayoConnectionPlugin from './strophe.rayo';
 import initStropheLogger from './strophe.logger';
-import Listenable from '../util/Listenable';
-import Caps from './Caps';
-import GlobalOnErrorHandler from '../util/GlobalOnErrorHandler';
-import XMPPEvents from '../../service/xmpp/XMPPEvents';
-import XmppConnection from './XmppConnection';
+import RayoConnectionPlugin from './strophe.rayo';
+import initStropheUtil from './strophe.util';
 
 const logger = getLogger(__filename);
 
@@ -147,8 +148,12 @@ export default class XMPP extends Listenable {
         this.caps.addFeature('urn:xmpp:jingle:apps:rtp:audio');
         this.caps.addFeature('urn:xmpp:jingle:apps:rtp:video');
 
-        if (!this.options.disableRtx && browser.supportsRtx()) {
+        // Disable RTX on Firefox because of https://bugzilla.mozilla.org/show_bug.cgi?id=1668028.
+        if (!(this.options.disableRtx || browser.isFirefox())) {
             this.caps.addFeature('urn:ietf:rfc:4588');
+        }
+        if (this.options.enableOpusRed === true && browser.supportsAudioRed()) {
+            this.caps.addFeature('http://jitsi.org/opus-red');
         }
 
         // this is dealt with by SDP O/A so we don't need to announce this
@@ -163,7 +168,7 @@ export default class XMPP extends Listenable {
         // this.caps.addFeature('urn:ietf:rfc:5576'); // a=ssrc
 
         // Enable Lipsync ?
-        if (browser.isChrome() && this.options.enableLipSync !== false) {
+        if (browser.isChromiumBased() && this.options.enableLipSync === true) {
             logger.info('Lip-sync enabled !');
             this.caps.addFeature('http://jitsi.org/meet/lipsync');
         }
@@ -171,15 +176,10 @@ export default class XMPP extends Listenable {
         if (this.connection.rayo) {
             this.caps.addFeature('urn:xmpp:rayo:client:1');
         }
-    }
 
-    /**
-     * Returns {@code true} if the PING functionality is supported by the server
-     * or {@code false} otherwise.
-     * @returns {boolean}
-     */
-    isPingSupported() {
-        return this._pingSupported !== false;
+        if (E2EEncryption.isSupported(this.options)) {
+            this.caps.addFeature('https://jitsi.org/meet/e2ee');
+        }
     }
 
     /**
@@ -210,16 +210,13 @@ export default class XMPP extends Listenable {
             now);
 
         this.eventEmitter.emit(XMPPEvents.CONNECTION_STATUS_CHANGED, credentials, status, msg);
-        if (status === Strophe.Status.CONNECTED
-            || status === Strophe.Status.ATTACHED) {
-            if (this.options.useStunTurn
-                || (this.options.p2p && this.options.p2p.useStunTurn)) {
-                this.connection.jingle.getStunAndTurnCredentials();
-            }
+        if (status === Strophe.Status.CONNECTED || status === Strophe.Status.ATTACHED) {
+            this.connection.jingle.getStunAndTurnCredentials();
 
             logger.info(`My Jabber ID: ${this.connection.jid}`);
 
-            this.lastErrorMsg = undefined;
+            // XmppConnection emits CONNECTED again on reconnect - a good opportunity to clear any "last error" flags
+            this._resetState();
 
             // Schedule ping ?
             const pingJid = this.connection.domain;
@@ -227,11 +224,9 @@ export default class XMPP extends Listenable {
             // FIXME no need to do it again on stream resume
             this.caps.getFeaturesAndIdentities(pingJid)
                 .then(({ features, identities }) => {
-                    if (features.has(Strophe.NS.PING)) {
-                        this._pingSupported = true;
-                        this.connection.ping.startInterval(pingJid);
-                    } else {
-                        logger.warn(`Ping NOT supported by ${pingJid}`);
+                    if (!features.has(Strophe.NS.PING)) {
+                        logger.error(
+                            `Ping NOT supported by ${pingJid} - please enable ping in your XMPP server config`);
                     }
 
                     // check for speakerstats
@@ -242,6 +237,20 @@ export default class XMPP extends Listenable {
 
                         if (identity.type === 'conference_duration') {
                             this.conferenceDurationComponentAddress = identity.name;
+                        }
+
+                        if (identity.type === 'lobbyrooms') {
+                            this.lobbySupported = true;
+                            identity.name && this.caps.getFeaturesAndIdentities(identity.name, identity.type)
+                                .then(({ features: f }) => {
+                                    f.forEach(fr => {
+                                        if (fr.endsWith('#displayname_required')) {
+                                            this.eventEmitter.emit(
+                                                JitsiConnectionEvents.DISPLAY_NAME_REQUIRED);
+                                        }
+                                    });
+                                })
+                                .catch(e => logger.warn('Error getting features from lobby.', e && e.message));
                         }
                     });
 
@@ -288,10 +297,9 @@ export default class XMPP extends Listenable {
         } else if (status === Strophe.Status.DISCONNECTED) {
             // Stop ping interval
             this.connection.ping.stopInterval();
-            const wasIntentionalDisconnect = this.disconnectInProgress;
+            const wasIntentionalDisconnect = Boolean(this.disconnectInProgress);
             const errMsg = msg || this.lastErrorMsg;
 
-            this.disconnectInProgress = false;
             if (this.anonymousConnectionFailed) {
                 // prompt user for username and password
                 this.eventEmitter.emit(
@@ -378,9 +386,7 @@ export default class XMPP extends Listenable {
         //  Status.DISCONNECTING - The connection is currently being terminated
         //  Status.ATTACHED - The connection has been attached
 
-        this.anonymousConnectionFailed = false;
-        this.connectionFailed = false;
-        this.lastErrorMsg = undefined;
+        this._resetState();
         this.connection.connect(
             jid,
             password,
@@ -398,6 +404,7 @@ export default class XMPP extends Listenable {
      * @param options {object} connecting options - rid, sid, jid and password.
      */
     attach(options) {
+        this._resetState();
         const now = this.connectionTimes.attaching = window.performance.now();
 
         logger.log('(TIME) Strophe Attaching:\t', now);
@@ -407,6 +414,17 @@ export default class XMPP extends Listenable {
                 jid: options.jid,
                 password: options.password
             }));
+    }
+
+    /**
+     * Resets any state/flag before starting a new connection.
+     * @private
+     */
+    _resetState() {
+        this.anonymousConnectionFailed = false;
+        this.connectionFailed = false;
+        this.lastErrorMsg = undefined;
+        this.disconnectInProgress = undefined;
     }
 
     /**
@@ -455,7 +473,9 @@ export default class XMPP extends Listenable {
      * @returns {Promise} Resolves with an instance of a strophe muc.
      */
     createRoom(roomName, options, onCreateResource) {
-        let roomjid = `${roomName}@${this.options.hosts.muc}/`;
+        // There are cases (when using subdomain) where muc can hold an uppercase part
+        let roomjid = `${roomName}@${options.customDomain
+            ? options.customDomain : this.options.hosts.muc.toLowerCase()}/`;
 
         const mucNickname = onCreateResource
             ? onCreateResource(this.connection.jid, this.authenticatedUser)
@@ -502,20 +522,15 @@ export default class XMPP extends Listenable {
     }
 
     /**
-     * Pings the server. Remember to check {@link isPingSupported} before using
-     * this method.
+     * Pings the server.
      * @param timeout how many ms before a timeout should occur.
      * @returns {Promise} resolved on ping success and reject on an error or
      * a timeout.
      */
     ping(timeout) {
         return new Promise((resolve, reject) => {
-            if (this.isPingSupported()) {
-                this.connection.ping
+            this.connection.ping
                     .ping(this.connection.domain, resolve, reject, timeout);
-            } else {
-                reject('PING operation is not supported by the server');
-            }
         });
     }
 
@@ -534,15 +549,13 @@ export default class XMPP extends Listenable {
      * @returns {Promise} - Resolves when the disconnect process is finished or rejects with an error.
      */
     disconnect(ev) {
-        if (this.disconnectInProgress || !this.connection) {
-            this.eventEmitter.emit(JitsiConnectionEvents.WRONG_STATE);
-
-            return Promise.reject(new Error('Wrong connection state!'));
+        if (this.disconnectInProgress) {
+            return this.disconnectInProgress;
+        } else if (!this.connection) {
+            return Promise.resolve();
         }
 
-        this.disconnectInProgress = true;
-
-        return new Promise(resolve => {
+        this.disconnectInProgress = new Promise(resolve => {
             const disconnectListener = (credentials, status) => {
                 if (status === Strophe.Status.DISCONNECTED) {
                     resolve();
@@ -551,9 +564,11 @@ export default class XMPP extends Listenable {
             };
 
             this.eventEmitter.on(XMPPEvents.CONNECTION_STATUS_CHANGED, disconnectListener);
-
-            this._cleanupXmppConnection(ev);
         });
+
+        this._cleanupXmppConnection(ev);
+
+        return this.disconnectInProgress;
     }
 
     /**
@@ -627,7 +642,6 @@ export default class XMPP extends Listenable {
 
         this.connection.addConnectionPlugin('emuc', new MucConnectionPlugin(this));
         this.connection.addConnectionPlugin('jingle', new JingleConnectionPlugin(this, this.eventEmitter, iceConfig));
-        this.connection.addConnectionPlugin('ping', new PingConnectionPlugin(this));
         this.connection.addConnectionPlugin('rayo', new RayoConnectionPlugin());
     }
 
@@ -668,7 +682,7 @@ export default class XMPP extends Listenable {
         /* eslint-disable camelcase */
         // check for possible suspend
         details.suspend_time = this.connection.ping.getPingSuspendTime();
-        details.time_since_last_success = this.connection.getTimeSinceLastBOSHSuccess();
+        details.time_since_last_success = this.connection.getTimeSinceLastSuccess();
         /* eslint-enable camelcase */
 
         return details;
@@ -726,6 +740,8 @@ export default class XMPP extends Listenable {
                     + 'structure', 'topic: ', type);
             }
         } catch (e) {
+            logger.error(e);
+
             return false;
         }
 
@@ -744,7 +760,7 @@ export default class XMPP extends Listenable {
 
         if (!(from === this.speakerStatsComponentAddress
             || from === this.conferenceDurationComponentAddress)) {
-            return;
+            return true;
         }
 
         const jsonMessage = $(msg).find('>json-message')

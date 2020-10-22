@@ -1,11 +1,13 @@
-import browser from '../browser';
 import { browsers } from '@jitsi/js-utils';
+import { getLogger } from 'jitsi-meet-logger';
 
-import * as StatisticsEvents from '../../service/statistics/Events';
 import * as MediaType from '../../service/RTC/MediaType';
+import * as StatisticsEvents from '../../service/statistics/Events';
+import browser from '../browser';
 
 const GlobalOnErrorHandler = require('../util/GlobalOnErrorHandler');
-const logger = require('jitsi-meet-logger').getLogger(__filename);
+
+const logger = getLogger(__filename);
 
 /**
  * The lib-jitsi-meet browser-agnostic names of the browser-specific keys
@@ -21,9 +23,9 @@ KEYS_BY_BROWSER_TYPE[browsers.FIREFOX] = {
     'bytesReceived': 'bytesReceived',
     'bytesSent': 'bytesSent',
     'framerateMean': 'framerateMean',
-    'ip': 'ipAddress',
-    'port': 'portNumber',
-    'protocol': 'transport'
+    'ip': 'address',
+    'port': 'port',
+    'protocol': 'protocol'
 };
 KEYS_BY_BROWSER_TYPE[browsers.CHROME] = {
     'receiveBandwidth': 'googAvailableReceiveBandwidth',
@@ -38,6 +40,7 @@ KEYS_BY_BROWSER_TYPE[browsers.CHROME] = {
     'packetsLost': 'packetsLost',
     'bytesReceived': 'bytesReceived',
     'bytesSent': 'bytesSent',
+    'googCodecName': 'googCodecName',
     'googFrameHeightReceived': 'googFrameHeightReceived',
     'googFrameWidthReceived': 'googFrameWidthReceived',
     'googFrameHeightSent': 'googFrameHeightSent',
@@ -92,6 +95,7 @@ function SsrcStats() {
     };
     this.resolution = {};
     this.framerate = 0;
+    this.codec = '';
 }
 
 /**
@@ -135,6 +139,10 @@ SsrcStats.prototype.resetBitrate = function() {
  */
 SsrcStats.prototype.setFramerate = function(framerate) {
     this.framerate = framerate || 0;
+};
+
+SsrcStats.prototype.setCodec = function(codec) {
+    this.codec = codec || '';
 };
 
 /**
@@ -215,7 +223,7 @@ export default function StatsCollector(
      * @type {boolean}
      */
     this._usesPromiseGetStats
-        = browser.isSafariWithWebrtc() || browser.isFirefox();
+        = browser.isSafari() || browser.isFirefox();
 
     /**
      * The function which is to be used to retrieve the value associated in a
@@ -284,43 +292,63 @@ StatsCollector.prototype.errorCallback = function(error) {
  * Starts stats updates.
  */
 StatsCollector.prototype.start = function(startAudioLevelStats) {
-    const self = this;
-
     if (startAudioLevelStats) {
+        if (browser.supportsReceiverStats()) {
+            logger.info('Using RTCRtpSynchronizationSource for remote audio levels');
+        }
         this.audioLevelsIntervalId = setInterval(
             () => {
-                // Interval updates
-                self.peerconnection.getStats(
-                    report => {
-                        let results = null;
+                if (browser.supportsReceiverStats()) {
+                    const audioLevels = this.peerconnection.getAudioLevels();
 
-                        if (!report || !report.result
-                            || typeof report.result !== 'function') {
-                            results = report;
-                        } else {
-                            results = report.result();
-                        }
-                        self.currentAudioLevelsReport = results;
-                        if (this._usesPromiseGetStats) {
-                            self.processNewAudioLevelReport();
-                        } else {
-                            self.processAudioLevelReport();
-                        }
+                    for (const ssrc in audioLevels) {
+                        if (audioLevels.hasOwnProperty(ssrc)) {
+                            // Use a scaling factor of 2.5 to report the same
+                            // audio levels that getStats reports.
+                            const audioLevel = audioLevels[ssrc] * 2.5;
 
-                        self.baselineAudioLevelsReport
-                            = self.currentAudioLevelsReport;
-                    },
-                    error => self.errorCallback(error)
-                );
+                            this.eventEmitter.emit(
+                                StatisticsEvents.AUDIO_LEVEL,
+                                this.peerconnection,
+                                Number.parseInt(ssrc, 10),
+                                audioLevel,
+                                false /* isLocal */);
+                        }
+                    }
+                } else {
+                    // Interval updates
+                    this.peerconnection.getStats(
+                        report => {
+                            let results = null;
+
+                            if (!report || !report.result
+                                || typeof report.result !== 'function') {
+                                results = report;
+                            } else {
+                                results = report.result();
+                            }
+                            this.currentAudioLevelsReport = results;
+                            if (this._usesPromiseGetStats) {
+                                this.processNewAudioLevelReport();
+                            } else {
+                                this.processAudioLevelReport();
+                            }
+
+                            this.baselineAudioLevelsReport
+                                = this.currentAudioLevelsReport;
+                        },
+                        error => this.errorCallback(error)
+                    );
+                }
             },
-            self.audioLevelsIntervalMilis
+            this.audioLevelsIntervalMilis
         );
     }
 
     this.statsIntervalId = setInterval(
         () => {
             // Interval updates
-            self.peerconnection.getStats(
+            this.peerconnection.getStats(
                 report => {
                     let results = null;
 
@@ -333,24 +361,24 @@ StatsCollector.prototype.start = function(startAudioLevelStats) {
                         results = report.result();
                     }
 
-                    self.currentStatsReport = results;
+                    this.currentStatsReport = results;
                     try {
                         if (this._usesPromiseGetStats) {
-                            self.processNewStatsReport();
+                            this.processNewStatsReport();
                         } else {
-                            self.processStatsReport();
+                            this.processStatsReport();
                         }
                     } catch (e) {
                         GlobalOnErrorHandler.callErrorHandler(e);
                         logger.error(`Unsupported key:${e}`, e);
                     }
 
-                    self.previousStatsReport = self.currentStatsReport;
+                    this.previousStatsReport = this.currentStatsReport;
                 },
-                error => self.errorCallback(error)
+                error => this.errorCallback(error)
             );
         },
-        self.statsIntervalMilis
+        this.statsIntervalMilis
     );
 };
 
@@ -693,7 +721,17 @@ StatsCollector.prototype.processStatsReport = function() {
         } else {
             ssrcStats.setResolution(null);
         }
+
+        let codec;
+
+        // Try to get the codec for later reporting.
+        try {
+            codec = getStatValue(now, 'googCodecName') || '';
+        } catch (e) { /* not supported*/ }
+
+        ssrcStats.setCodec(codec);
     }
+
 
     this.eventEmitter.emit(
         StatisticsEvents.BYTE_SENT_STATS, this.peerconnection, byteSentStats);
@@ -718,10 +756,13 @@ StatsCollector.prototype._processAndEmitReport = function() {
     let bitrateUpload = 0;
     const resolutions = {};
     const framerates = {};
+    const codecs = {};
     let audioBitrateDownload = 0;
     let audioBitrateUpload = 0;
+    let audioCodec = '';
     let videoBitrateDownload = 0;
     let videoBitrateUpload = 0;
+    let videoCodec = '';
 
     for (const [ ssrc, ssrcStats ] of this.ssrc2stats) {
         // process packet loss stats
@@ -742,9 +783,11 @@ StatsCollector.prototype._processAndEmitReport = function() {
             if (track.isAudioTrack()) {
                 audioBitrateDownload += ssrcStats.bitrate.download;
                 audioBitrateUpload += ssrcStats.bitrate.upload;
+                audioCodec = ssrcStats.codec;
             } else {
                 videoBitrateDownload += ssrcStats.bitrate.download;
                 videoBitrateUpload += ssrcStats.bitrate.upload;
+                videoCodec = ssrcStats.codec;
             }
 
             const participantId = track.getParticipantId();
@@ -766,6 +809,17 @@ StatsCollector.prototype._processAndEmitReport = function() {
 
                     userFramerates[ssrc] = ssrcStats.framerate;
                     framerates[participantId] = userFramerates;
+                }
+                if (audioCodec.length && videoCodec.length) {
+                    const codecDesc = {
+                        'audio': audioCodec,
+                        'video': videoCodec
+                    };
+
+                    const userCodecs = codecs[participantId] || {};
+
+                    userCodecs[ssrc] = codecDesc;
+                    codecs[participantId] = userCodecs;
                 }
             } else {
                 logger.error(`No participant ID returned by ${track}`);
@@ -833,6 +887,7 @@ StatsCollector.prototype._processAndEmitReport = function() {
             'packetLoss': this.conferenceStats.packetLoss,
             'resolution': resolutions,
             'framerate': framerates,
+            'codec': codecs,
             'transport': this.conferenceStats.transport,
             localAvgAudioLevels,
             avgAudioLevels
@@ -1056,8 +1111,6 @@ StatsCollector.prototype.processNewStatsReport = function() {
             // https://w3c.github.io/webrtc-stats/#icecandidate-dict*
             // safari currently does not provide ice candidates in stats
             if (remoteUsedCandidate && localUsedCandidate) {
-                // FF uses non-standard ipAddress, portNumber, transport
-                // instead of ip, port, protocol
                 const remoteIpAddress = getStatValue(remoteUsedCandidate, 'ip');
                 const remotePort = getStatValue(remoteUsedCandidate, 'port');
                 const ip = `${remoteIpAddress}:${remotePort}`;
@@ -1208,6 +1261,10 @@ StatsCollector.prototype.processNewStatsReport = function() {
 
             const trackIdentifier = now.trackIdentifier;
             const ssrc = this.peerconnection.getSsrcByTrackId(trackIdentifier);
+
+            if (!ssrc) {
+                return;
+            }
             let ssrcStats = this.ssrc2stats.get(ssrc);
 
             if (!ssrcStats) {
