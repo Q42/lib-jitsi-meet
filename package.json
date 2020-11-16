@@ -1,10 +1,10 @@
 {
-  "name": "lib-jitsi-meet",
-  "version": "0.0.0",
-  "description": "JS library for accessing Jitsi server side deployments",
+  "name": "@q42/lib-jitsi-meet",
+  "version": "2.0.4289-1",
+  "description": "Borrel fork for accessing Jitsi server side deployments",
   "repository": {
     "type": "git",
-    "url": "git://github.com/jitsi/lib-jitsi-meet"
+    "url": "https://github.com/Q42/Borrel.JitsiMeet.Lib"
   },
   "keywords": [
     "jingle",
@@ -16,12 +16,12 @@
   "author": "",
   "readmeFilename": "README.md",
   "dependencies": {
+    "@jitsi/js-utils": "^1.0.2",
     "@jitsi/sdp-interop": "0.1.14",
     "@jitsi/sdp-simulcast": "0.2.2",
     "async": "0.9.0",
     "current-executing-script": "0.1.3",
     "jitsi-meet-logger": "github:jitsi/jitsi-meet-logger#5ec92357570dc8f0b7ffc1528820721c84c6af8b",
-    "js-utils": "github:jitsi/js-utils#8567f86ec2774ae1d1c47b22e3435928cf5d9771",
     "lodash.isequal": "4.5.0",
     "sdp-transform": "2.3.0",
     "strophe.js": "1.3.4",
@@ -57,7 +57,7 @@
   },
   "scripts": {
     "lint": "eslint . && flow",
-    "postinstall": "webpack -p",
+    "build": "webpack -p",
     "test": "karma start karma.conf.js",
     "test-watch": "karma start karma.conf.js --no-single-run",
     "validate": "npm ls"
