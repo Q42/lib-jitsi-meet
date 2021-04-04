@@ -1,7 +1,7 @@
 {
-    "name": "@q42/lib-jitsi-meet",
-    "version": "2.0.5374",
-    "description": "JS library for accessing Jitsi server side deployments",
+    "name": "@mibo/lib-jitsi-meet",
+    "version": "2.0.5734",
+    "description": "Mibo fork for accessing Jitsi server side deployments",
     "repository": {
         "type": "git",
         "url": "https://github.com/getmibo/Mibo.JitsiMeet.Lib"
