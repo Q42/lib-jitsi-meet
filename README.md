@@ -25,30 +25,39 @@ Ofcourse replace the X's with the correct version number.
 ## Making the package ready for publishing
 The default Jitsi Meet API library is developed to be used directly in the Jitsi Meet Server environment. This means that it is not always easy to re-use in other projects because of certain requirements. It is quite easy to work around these requirements because the Jitsi development team is also working hard on cutting down these dependancies.
 
-One if the first things we need to do is make sure that we use the `@jitsi/js-utils` npm package instead of the `js-utils`. This package is already used in some newer versions, but older versions do not use it. The main downside of the old `js-utils` library is the sporadic use of Flow. Which requires you to setup Flow in your own project. To do this run:
-
-```
-npm uninstall js-utils
-npm install @jitsi/js-utils
-```
-
-After which you can replace all imports in the project that used `js-utils` with `@jitsi/js-utils`.
-
-The final steps is updating the `package.json` so that it reflects the correct name and version of the package. Furthermore the `postinstall` command in the `package.json` requires webpack to be in the project, which is also not needed in our case.
+The only step required to do so is updating the `package.json` so that it reflects the correct name and version of the package. Furthermore the `postinstall` command in the `package.json` requires webpack to be in the project, which is also not needed in our case.
 
 Let's start with updating the name and version of the package, by replacing all existing values with these new values:
 
 ```
-"name": "@q42/lib-jitsi-meet",
+"name": "@mibo/lib-jitsi-meet",
 "version": "2.0.XXXX",
-"description": "Borrel fork for accessing Jitsi server side deployments",
+"description": "Mibo fork for accessing Jitsi server side deployments",
 "repository": {
     "type": "git",
-    "url": "https://github.com/Q42/Borrel.JitsiMeet.Lib"
+    "url": "https://github.com/getmibo/Mibo.JitsiMeet.Lib"
 }
 ```
 
 Again, replace the X's with the correct version number so that it is clear which version is published. Now let's replace the `postinstall` command with `build` so that it can be called still.
+
+### Custom patch: Screensharing
+
+Go to ScreenObtainer.js around line 167 and replace
+```
+getDisplayMedia({
+            video: true,
+            audio: true
+```
+
+with 
+```
+getDisplayMedia({
+            video: options.video ? options.video : true,
+            audio: true
+```
+
+this way we can actually provide changes to screensharing resolution requirements
 
 ## Publishing package
 After doing all of the above there is only one more step to publish the package to NPM and use it in the project. Run the following commands to make sure we're publishing the right version and it's not broken:
