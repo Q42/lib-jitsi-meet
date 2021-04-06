@@ -41,6 +41,24 @@ Let's start with updating the name and version of the package, by replacing all 
 
 Again, replace the X's with the correct version number so that it is clear which version is published. Now let's replace the `postinstall` command with `build` so that it can be called still.
 
+### Custom patch: Screensharing
+
+Go to ScreenObtainer.js around line 167 and replace
+```
+getDisplayMedia({
+            video: true,
+            audio: true
+```
+
+with 
+```
+getDisplayMedia({
+            video: options.video ? options.video : true,
+            audio: true
+```
+
+this way we can actually provide changes to screensharing resolution requirements
+
 ## Publishing package
 After doing all of the above there is only one more step to publish the package to NPM and use it in the project. Run the following commands to make sure we're publishing the right version and it's not broken:
 
