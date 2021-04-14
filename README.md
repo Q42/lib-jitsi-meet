@@ -53,11 +53,11 @@ getDisplayMedia({
 with 
 ```
 getDisplayMedia({
-            video: options.video ? options.video : true,
+            video: { width: 1280, height: 720 },
             audio: true
 ```
 
-this way we can actually provide changes to screensharing resolution requirements
+it hardcodes screensharing to 720p, jitsi is a config hell and this is the best option until they allow you to do from config (they do crazy config filtering for desktop)
 
 ## Publishing package
 After doing all of the above there is only one more step to publish the package to NPM and use it in the project. Run the following commands to make sure we're publishing the right version and it's not broken:
