@@ -164,7 +164,11 @@ const ScreenObtainer = {
         }
 
         getDisplayMedia({
-            video: options.video ? options.video : true,
+            // hardcoded res for screensharing due to jitsi config filtering heavy
+            video: {
+                width: 1280,
+                height: 720,
+            },
             audio: true,
             cursor: 'always'
         })
