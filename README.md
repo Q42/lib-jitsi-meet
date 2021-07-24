@@ -43,18 +43,16 @@ Again, replace the X's with the correct version number so that it is clear which
 
 ### Custom patch: Screensharing
 
-Go to ScreenObtainer.js around line 167 and replace
+Go to ScreenObtainer.js around line 225 and replace
 ```
-getDisplayMedia({
-            video: true,
-            audio: true
+      const constraints = {
+            video,
 ```
 
 with 
 ```
-getDisplayMedia({
+      const constraints = {
             video: { width: 1280, height: 720 },
-            audio: true
 ```
 
 it hardcodes screensharing to 720p, jitsi is a config hell and this is the best option until they allow you to do from config (they do crazy config filtering for desktop)
