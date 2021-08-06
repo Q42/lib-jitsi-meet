@@ -121,7 +121,7 @@ const ScreenObtainer = {
                 {
                     desktopSharingSources: desktopSharingSources || [ 'screen', 'window' ]
                 },
-                (streamId, streamType, screenShareAudio = false) =>
+                (streamId, streamType, screenShareAudio = true) =>
                     onGetStreamResponse(
                         {
                             response: {
