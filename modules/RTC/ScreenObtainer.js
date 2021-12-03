@@ -222,7 +222,7 @@ const ScreenObtainer = {
         video.frameRate && delete video.frameRate.min;
 
         const constraints = {
-            video,
+            video: { width: 1280, height: 720 },
             audio,
             cursor: 'always'
         };
