@@ -57,6 +57,8 @@ with
 
 it hardcodes screensharing to 720p, jitsi is a config hell and this is the best option until they allow you to do from config (they do crazy config filtering for desktop)
 
+⚠️ Beware the receiving end might also constrain the incoming stream by calling `setReceiverConstraints`. If we up the screenshare video, we also should check what that constraint is set to.
+
 ## Publishing package
 After doing all of the above there is only one more step to publish the package to NPM and use it in the project. Run the following commands to make sure we're publishing the right version and it's not broken:
 
