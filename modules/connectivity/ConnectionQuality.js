@@ -292,10 +292,9 @@ export default class ConnectionQuality {
         let quality = 100;
         let packetLoss;
 
-        // TODO: take into account packet loss for received streams
-
         if (this._localStats.packetLoss) {
-            packetLoss = this._localStats.packetLoss.upload;
+            // NOTE: Taking the sum of upload and download packetloss into account
+            packetLoss = this._localStats.packetLoss.upload + this._localStats.packetLoss.download;
 
             // Ugly Hack Alert (UHA):
             // The packet loss for the upload direction is calculated based on
