@@ -1,6 +1,6 @@
 {
     "name": "@mibo/lib-jitsi-meet",
-    "version": "2.0.6688",
+    "version": "2.0.6688-1",
     "description": "Mibo fork for accessing Jitsi server side deployments",
     "repository": {
         "type": "git",
