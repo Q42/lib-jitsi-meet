@@ -52,7 +52,7 @@ Go to ScreenObtainer.js around line 225 and replace
 with 
 ```
       const constraints = {
-            video: { width: 1280, height: 720 },
+            video: { width: 1920, height: 1080 },
 ```
 
 it hardcodes screensharing to 720p, jitsi is a config hell and this is the best option until they allow you to do from config (they do crazy config filtering for desktop)
