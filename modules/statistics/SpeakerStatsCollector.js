@@ -1,7 +1,15 @@
 import * as JitsiConferenceEvents from '../../JitsiConferenceEvents';
-import XMPPEvents from '../../service/xmpp/XMPPEvents';
+import { XMPPEvents } from '../../service/xmpp/XMPPEvents';
 
 import SpeakerStats from './SpeakerStats';
+
+
+/**
+ * The value to use for the "type" field for messages sent
+ * over the data channel that contain a face landmark.
+ */
+
+const FACE_LANDMARK_MESSAGE_TYPE = 'face-landmarks';
 
 /**
  * A collection for tracking speaker stats. Attaches listeners
@@ -41,6 +49,14 @@ export default class SpeakerStatsCollector {
         conference.addEventListener(
             JitsiConferenceEvents.DISPLAY_NAME_CHANGED,
             this._onDisplayNameChange.bind(this));
+
+        conference.on(
+            JitsiConferenceEvents.ENDPOINT_MESSAGE_RECEIVED,
+                (participant, { type, faceLandmarks }) => {
+                    if (type === FACE_LANDMARK_MESSAGE_TYPE) {
+                        this._onFaceLandmarkAdd(participant.getId(), faceLandmarks);
+                    }
+                });
         if (conference.xmpp) {
             conference.xmpp.addListener(
                 XMPPEvents.SPEAKER_STATS_RECEIVED,
@@ -52,18 +68,19 @@ export default class SpeakerStatsCollector {
      * Reacts to dominant speaker change events by changing its speaker stats
      * models to reflect the current dominant speaker.
      *
-     * @param {string} dominantSpeakerId - The user id of the new
-     * dominant speaker.
+     * @param {string} dominantSpeakerId - The user id of the new dominant speaker.
+     * @param {Array[string]} previous - The array with previous speakers.
+     * @param {boolean} silence - Indecates whether the dominant speaker is silent or not.
      * @returns {void}
      * @private
      */
-    _onDominantSpeaker(dominantSpeakerId) {
+    _onDominantSpeaker(dominantSpeakerId, previous, silence) {
         const oldDominantSpeaker
             = this.stats.users[this.stats.dominantSpeakerId];
         const newDominantSpeaker = this.stats.users[dominantSpeakerId];
 
         oldDominantSpeaker && oldDominantSpeaker.setDominantSpeaker(false);
-        newDominantSpeaker && newDominantSpeaker.setDominantSpeaker(true);
+        newDominantSpeaker && newDominantSpeaker.setDominantSpeaker(true, silence);
         this.stats.dominantSpeakerId = dominantSpeakerId;
     }
 
@@ -118,11 +135,26 @@ export default class SpeakerStatsCollector {
     }
 
     /**
+     * Processes a new face landmark object of a remote user.
+     *
+     * @param {string} userId - The user id of the user that left.
+     * @param {Object} data - The face landmark object.
+     * @returns {void}
+     * @private
+     */
+    _onFaceLandmarkAdd(userId, data) {
+        const savedUser = this.stats.users[userId];
+
+        if (savedUser && data) {
+            savedUser.addFaceLandmarks(data);
+        }
+    }
+
+    /**
      * Return a copy of the tracked SpeakerStats models.
      *
      * @returns {Object} The keys are the user ids and the values are the
      * associated user's SpeakerStats model.
-     * @private
      */
     getStats() {
         return this.stats.users;
@@ -154,10 +186,12 @@ export default class SpeakerStatsCollector {
                     this.stats.users[userId] = speakerStatsToUpdate;
                     speakerStatsToUpdate.markAsHasLeft();
                 }
-            }
 
-            speakerStatsToUpdate.totalDominantSpeakerTime
-                = newStats[userId].totalDominantSpeakerTime;
+                speakerStatsToUpdate.totalDominantSpeakerTime
+                    = newStats[userId].totalDominantSpeakerTime;
+
+                speakerStatsToUpdate.setFaceLandmarks(newStats[userId].faceLandmarks);
+            }
         }
     }
 }

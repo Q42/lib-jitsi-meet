@@ -1,4 +1,4 @@
-import { getLogger } from 'jitsi-meet-logger';
+import { getLogger } from '@jitsi/logger';
 
 import * as JitsiTrackEvents from '../../JitsiTrackEvents';
 import RTC from '../RTC/RTC';
@@ -32,12 +32,8 @@ export default function getActiveAudioDevice() {
                     // We expect a single device to be available when obtained from obtainAudioAndVideoPermissions
                     // that's  why only take p.value[0].
                     const track = tracks[0];
-                    const originalStream = track.getOriginalStream();
 
-                    Statistics.startLocalStats(originalStream, track.setAudioLevel.bind(track));
-                    track.addEventListener(JitsiTrackEvents.LOCAL_TRACK_STOPPED, () => {
-                        Statistics.stopLocalStats(originalStream);
-                    });
+                    Statistics.startLocalStats(track, track.setAudioLevel.bind(track));
 
                     return track;
                 });

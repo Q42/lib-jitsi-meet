@@ -1,9 +1,8 @@
-/* global __filename, module */
+import { getLogger } from '@jitsi/logger';
 import EventEmitter from 'events';
-import { getLogger } from 'jitsi-meet-logger';
 
 import * as JitsiTrackEvents from '../../JitsiTrackEvents';
-import * as MediaType from '../../service/RTC/MediaType';
+import { MediaType } from '../../service/RTC/MediaType';
 import browser from '../browser';
 
 import RTCUtils from './RTCUtils';
@@ -172,6 +171,13 @@ export default class JitsiTrack extends EventEmitter {
                 this._addMediaStreamInactiveHandler(this._streamInactiveHandler);
             }
         }
+    }
+
+    /**
+     * Returns the video type (camera or desktop) of this track.
+     */
+    getVideoType() {
+        return this.videoType;
     }
 
     /**
@@ -382,23 +388,11 @@ export default class JitsiTrack extends EventEmitter {
     }
 
     /**
-     * Returns true if this is a video track and the source of the video is a
-     * screen capture as opposed to a camera.
-     */
-    isScreenSharing() {
-        // FIXME: Should be fixed or removed.
-    }
-
-    /**
      * Returns id of the track.
      * @returns {string|null} id of the track or null if this is fake track.
      */
     getId() {
-        if (this.stream) {
-            return RTCUtils.getStreamID(this.stream);
-        }
-
-        return null;
+        return this.getStreamId();
     }
 
     /**

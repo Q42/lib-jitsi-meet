@@ -1,9 +1,8 @@
-/* global $ */
-
-import { getLogger } from 'jitsi-meet-logger';
+import { getLogger } from '@jitsi/logger';
+import $ from 'jquery';
 import { Strophe } from 'strophe.js';
 
-import XMPPEvents from '../../service/xmpp/XMPPEvents';
+import { XMPPEvents } from '../../service/xmpp/XMPPEvents';
 
 import ChatRoom from './ChatRoom';
 import { ConnectionPluginListenable } from './ConnectionPlugin';
@@ -42,6 +41,8 @@ export default class MucConnectionPlugin extends ConnectionPluginListenable {
             'message', null, null);
         this.connection.addHandler(this.onMute.bind(this),
             'http://jitsi.org/jitmeet/audio', 'iq', 'set', null, null);
+        this.connection.addHandler(this.onMuteVideo.bind(this),
+            'http://jitsi.org/jitmeet/video', 'iq', 'set', null, null);
     }
 
     /**
@@ -53,7 +54,7 @@ export default class MucConnectionPlugin extends ConnectionPluginListenable {
     createRoom(jid, password, options) {
         const roomJid = Strophe.getBareJidFromJid(jid);
 
-        if (this.rooms[roomJid]) {
+        if (this.isRoomCreated(roomJid)) {
             const errmsg = 'You are already in the room!';
 
             logger.error(errmsg);
@@ -65,6 +66,16 @@ export default class MucConnectionPlugin extends ConnectionPluginListenable {
             XMPPEvents.EMUC_ROOM_ADDED, this.rooms[roomJid]);
 
         return this.rooms[roomJid];
+    }
+
+    /**
+     *  Check if a room with the passed JID is already created.
+     *
+     * @param {string} roomJid - The JID of the room.
+     * @returns {boolean}
+     */
+    isRoomCreated(roomJid) {
+        return roomJid in this.rooms;
     }
 
     /**
@@ -172,6 +183,24 @@ export default class MucConnectionPlugin extends ConnectionPluginListenable {
         }
 
         room.onMute(iq);
+
+        return true;
+    }
+
+    /**
+     * TODO: Document
+     * @param iq
+     */
+    onMuteVideo(iq) {
+        const from = iq.getAttribute('from');
+        const room = this.rooms[Strophe.getBareJidFromJid(from)];
+
+        // Returning false would result in the listener being deregistered by Strophe
+        if (!room) {
+            return true;
+        }
+
+        room.onMuteVideo(iq);
 
         return true;
     }

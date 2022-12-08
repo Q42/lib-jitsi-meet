@@ -14,6 +14,8 @@ export default class JibriSession {
     constructor(options = {}) {
         this._connection = options.connection;
         this._mode = options.mode;
+        this._jibriJid = null;
+        this._statusFromJicofo = '';
 
         this._setSessionID(options.sessionID);
         this.setStatus(options.status);
@@ -40,7 +42,7 @@ export default class JibriSession {
     /**
      * Returns the initiator of the session instance.
      *
-     * @returns {JitsiParticipant|undefined} The participant that started the session.
+     * @returns {JitsiParticipant|string} The participant that started the session.
      */
     getInitiator() {
         return this._initiator;
@@ -61,13 +63,25 @@ export default class JibriSession {
      * @returns {string|undefined}
      */
     getStatus() {
-        return this._status;
+        // If _status is not set fallback to the status reported by jicofo.
+        if (this._status) {
+            return this._status;
+        }
+
+        return this._statusFromJicofo;
+    }
+
+    /**
+     * @returns {string|undefined} the JID of jibri associated with this session.
+     */
+    getJibriJid() {
+        return this._jibriJid;
     }
 
     /**
      * Returns the jid of the participant that stopped the session.
      *
-     * @returns {JitsiParticipant|undefined} The participant that stopped the session.
+     * @returns {JitsiParticipant|string} The participant that stopped the session.
      */
     getTerminator() {
         return this._terminator;
@@ -115,17 +129,37 @@ export default class JibriSession {
     }
 
     /**
-     * Sets the creator's jid of the session.
-     * @param {JitsiParticipant} participant - The creator of the session.
+     * Set the session status reported by jicofo. If a jibri is present in the room,
+     * the status is always 'on'. Otherwise, we fallback to the status reported by jicofo.
+     *
+     * @param {string} status
+     */
+    setStatusFromJicofo(status) {
+        this._statusFromJicofo = status;
+    }
+
+    /**
+     * Set the JID of the jibri associated with this session.
+     *
+     * @param {*} jibriJid
+     */
+    setJibriJid(jibriJid) {
+        this._jibriJid = jibriJid;
+    }
+
+    /**
+     * Sets the participant that started the session.
+     * @param {JitsiParticipant | string} participant - The participant or resource id
+     * if local participant.
      */
     setInitiator(participant) {
         this._initiator = participant;
     }
 
     /**
-     * Sets the jid of the participant that stopped the session.
-     * @param {JitsiParticipant} participant  - The participant's jid,
-     * that stopped the session.
+     * Sets the participant that stopped the session.
+     * @param {JitsiParticipant | string} participant - The participant or the resource id
+     * if local participant.
      */
     setTerminator(participant) {
         this._terminator = participant;

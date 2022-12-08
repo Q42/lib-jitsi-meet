@@ -1,10 +1,9 @@
-/* global __filename */
-import { getLogger } from 'jitsi-meet-logger';
+import { getLogger } from '@jitsi/logger';
 import isEqual from 'lodash.isequal';
 
 import * as ConferenceEvents from '../../JitsiConferenceEvents';
-import * as MediaType from '../../service/RTC/MediaType';
-import * as VideoType from '../../service/RTC/VideoType';
+import { MediaType } from '../../service/RTC/MediaType';
+import { VideoType } from '../../service/RTC/VideoType';
 import * as ConnectionQualityEvents
     from '../../service/connectivity/ConnectionQualityEvents';
 import {
@@ -41,10 +40,12 @@ class AverageStatReport {
      * @param {number} nextValue
      */
     addNext(nextValue) {
+        if (typeof nextValue === 'undefined') {
+            return;
+        }
+
         if (typeof nextValue !== 'number') {
-            logger.error(
-                `${this.name} - invalid value for idx: ${this.count}`,
-                nextValue);
+            logger.error(`${this.name} - invalid value for idx: ${this.count}`, nextValue);
         } else if (!isNaN(nextValue)) {
             this.sum += nextValue;
             this.samples.push(nextValue);

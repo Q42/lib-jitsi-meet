@@ -2,6 +2,7 @@ import EventEmitter from 'events';
 
 import * as JitsiConferenceEvents from '../../JitsiConferenceEvents';
 import JitsiTrackError from '../../JitsiTrackError';
+import { JitsiTrackEvents } from '../../JitsiTrackEvents';
 import { FEEDBACK } from '../../service/statistics/AnalyticsEvents';
 import * as StatisticsEvents from '../../service/statistics/Events';
 import browser from '../browser';
@@ -14,7 +15,7 @@ import { PerformanceObserverStats } from './PerformanceObserverStats';
 import RTPStats from './RTPStatsCollector';
 import { CALLSTATS_SCRIPT_URL } from './constants';
 
-const logger = require('jitsi-meet-logger').getLogger(__filename);
+const logger = require('@jitsi/logger').getLogger(__filename);
 
 /**
  * Stores all active {@link Statistics} instances.
@@ -72,7 +73,8 @@ function _initCallStatsBackend(options) {
         applicationName: options.applicationName,
         getWiFiStatsMethod: options.getWiFiStatsMethod,
         confID: options.confID,
-        siteID: options.siteID
+        siteID: options.siteID,
+        configParams: options.configParams
     })) {
         logger.error('CallStats Backend initialization failed bad');
     }
@@ -141,6 +143,8 @@ Statistics.init = function(options) {
  * @property {string} customScriptUrl - A custom lib url to use when downloading
  * callstats library.
  * @property {string} roomName - The room name we are currently in.
+ * @property {string} configParams - The set of parameters
+ * to enable/disable certain features in the library. See CallStats docs for more info.
  */
 /**
  *
@@ -235,10 +239,47 @@ Statistics.prototype.startRemoteStats = function(peerconnection) {
 
 Statistics.localStats = [];
 
-Statistics.startLocalStats = function(stream, callback) {
+Statistics.startLocalStats = function(track, callback) {
+    if (browser.isIosBrowser()) {
+        // On iOS browsers audio is lost if the audio input device is in use by another app
+        // https://bugs.webkit.org/show_bug.cgi?id=233473
+        // The culprit was using the AudioContext, so now we close the AudioContext during
+        // the track being muted, and re-instantiate it afterwards.
+        track.addEventListener(
+        JitsiTrackEvents.NO_DATA_FROM_SOURCE,
+
+        /**
+         * Closes AudioContext on no audio data, and enables it on data received again.
+         *
+         * @param {boolean} value - Whether we receive audio data or not.
+         */
+        async value => {
+            if (value) {
+                for (const localStat of Statistics.localStats) {
+                    localStat.stop();
+                }
+
+                await LocalStats.disconnectAudioContext();
+            } else {
+                LocalStats.connectAudioContext();
+                for (const localStat of Statistics.localStats) {
+                    localStat.start();
+                }
+            }
+        });
+    }
+
     if (!Statistics.audioLevelsEnabled) {
         return;
     }
+
+    track.addEventListener(
+        JitsiTrackEvents.LOCAL_TRACK_STOPPED,
+        () => {
+            Statistics.stopLocalStats(track);
+        });
+
+    const stream = track.getOriginalStream();
     const localStats = new LocalStats(stream, Statistics.audioLevelsInterval,
         callback);
 
@@ -345,6 +386,20 @@ Statistics.prototype.removeLongTasksStatsListener = function(listener) {
     this.eventEmitter.removeListener(StatisticsEvents.LONG_TASKS_STATS, listener);
 };
 
+/**
+ * Updates the list of speakers for which the audio levels are to be calculated. This is needed for the jvb pc only.
+ *
+ * @param {Array<string>} speakerList The list of remote endpoint ids.
+ * @returns {void}
+ */
+Statistics.prototype.setSpeakerList = function(speakerList) {
+    for (const rtpStats of Array.from(this.rtpStatsMap.values())) {
+        if (!rtpStats.peerconnection.isP2P) {
+            rtpStats.setSpeakerList(speakerList);
+        }
+    }
+};
+
 Statistics.prototype.dispose = function() {
     try {
         // NOTE Before reading this please see the comment in stopCallStats...
@@ -371,10 +426,12 @@ Statistics.prototype.dispose = function() {
     }
 };
 
-Statistics.stopLocalStats = function(stream) {
+Statistics.stopLocalStats = function(track) {
     if (!Statistics.audioLevelsEnabled) {
         return;
     }
+
+    const stream = track.getOriginalStream();
 
     for (let i = 0; i < Statistics.localStats.length; i++) {
         if (Statistics.localStats[i].stream === stream) {
@@ -424,14 +481,22 @@ Statistics.prototype.startCallStats = function(tpc, remoteUserID) {
 
         return;
     }
+    let confID = this.options.confID;
+
+    // confID - domain/tenant/roomName
+    // roomName - meeting name or breakout room ID
+    // For breakout rooms we change the conference ID used for callstats to use
+    // the room ID instead of the meeting name
+    if (!confID.endsWith(this.options.roomName)) {
+        confID = `${this.options.confID.slice(0, this.options.confID.lastIndexOf('/'))}/${this.options.roomName}`;
+    }
 
     logger.info(`Starting CallStats for ${tpc}...`);
-
     const newInstance
         = new CallStats(
             tpc,
             {
-                confID: this.options.confID,
+                confID,
                 remoteUserID
             });
 
@@ -549,14 +614,15 @@ Statistics.prototype.sendScreenSharingEvent
  * Notifies the statistics module that we are now the dominant speaker of the
  * conference.
  * @param {String} roomJid - The room jid where the speaker event occurred.
+ * @param {boolean} silence - Whether the dominant speaker is silent or not.
  */
-Statistics.prototype.sendDominantSpeakerEvent = function(roomJid) {
+Statistics.prototype.sendDominantSpeakerEvent = function(roomJid, silence) {
     for (const cs of this.callsStatsInstances.values()) {
         cs.sendDominantSpeakerEvent();
     }
 
     // xmpp send dominant speaker event
-    this.xmpp.sendDominantSpeakerEvent(roomJid);
+    this.xmpp.sendDominantSpeakerEvent(roomJid, silence);
 };
 
 /**
@@ -709,6 +775,8 @@ Statistics.prototype.sendAddIceCandidateFailed = function(e, tpc) {
  */
 Statistics.sendLog = function(m) {
     const globalSubSet = new Set();
+
+    logger.log(m);
 
     // FIXME we don't want to duplicate logs over P2P instance, but
     // here we should go over instances and call this method for each

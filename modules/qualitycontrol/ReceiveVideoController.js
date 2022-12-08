@@ -1,6 +1,8 @@
-import { getLogger } from 'jitsi-meet-logger';
+import { getLogger } from '@jitsi/logger';
+import isEqual from 'lodash.isequal';
 
 import * as JitsiConferenceEvents from '../../JitsiConferenceEvents';
+import { MediaType } from '../../service/RTC/MediaType';
 
 const logger = getLogger(__filename);
 const MAX_HEIGHT_ONSTAGE = 2160;
@@ -11,7 +13,7 @@ const LASTN_UNLIMITED = -1;
  * This class translates the legacy signaling format between the client and the bridge (that affects bandwidth
  * allocation) to the new format described here https://github.com/jitsi/jitsi-videobridge/blob/master/doc/allocation.md
  */
-export class ReceiverVideoConstraints {
+class ReceiverVideoConstraints {
     /**
      * Creates a new instance.
      */
@@ -124,6 +126,23 @@ export class ReceiverVideoConstraints {
     }
 
     /**
+     * Updates the receiver constraints sent to the bridge.
+     *
+     * @param {Object} videoConstraints
+     * @returns {boolean} Returns true if the the value has been updated, false otherwise.
+     */
+    updateReceiverVideoConstraints(videoConstraints) {
+        const changed = !isEqual(this._receiverVideoConstraints, videoConstraints);
+
+        if (changed) {
+            this._receiverVideoConstraints = videoConstraints;
+            logger.debug(`Updating ReceiverVideoConstraints ${JSON.stringify(videoConstraints)}`);
+        }
+
+        return changed;
+    }
+
+    /**
      * Updates the list of selected endpoints.
      *
      * @param {Array<string>} ids
@@ -140,7 +159,7 @@ export class ReceiverVideoConstraints {
  * determined by the application based on how the remote video streams need to be displayed. This class is responsible
  * for communicating these constraints to the bridge over the bridge channel.
  */
-export class ReceiveVideoController {
+export default class ReceiveVideoController {
     /**
      * Creates a new instance for a given conference.
      *
@@ -152,16 +171,33 @@ export class ReceiveVideoController {
         this._conference = conference;
         this._rtc = rtc;
 
-        // Translate the legacy bridge channel signaling format to the new format.
-        this._receiverVideoConstraints = conference.options?.config?.useNewBandwidthAllocationStrategy
-            ? new ReceiverVideoConstraints()
-            : undefined;
+        const { config } = conference.options;
 
         // The number of videos requested from the bridge, -1 represents unlimited or all available videos.
-        this._lastN = LASTN_UNLIMITED;
+        this._lastN = config?.startLastN ?? (config?.channelLastN || LASTN_UNLIMITED);
 
         // The number representing the maximum video height the local client should receive from the bridge.
         this._maxFrameHeight = MAX_HEIGHT_ONSTAGE;
+
+        /**
+         * The map that holds the max frame height requested for each remote source when source-name signaling is
+         * enabled.
+         *
+         * @type Map<string, number>
+         */
+        this._sourceReceiverConstraints = new Map();
+
+        // Enable new receiver constraints by default unless it is explicitly disabled through config.js.
+        const useNewReceiverConstraints = config?.useNewBandwidthAllocationStrategy ?? true;
+
+        if (useNewReceiverConstraints) {
+            this._receiverVideoConstraints = new ReceiverVideoConstraints();
+            const lastNUpdated = this._receiverVideoConstraints.updateLastN(this._lastN);
+
+            lastNUpdated && this._rtc.setNewReceiverVideoConstraints(this._receiverVideoConstraints.constraints);
+        } else {
+            this._rtc.setLastN(this._lastN);
+        }
 
         // The endpoint IDs of the participants that are currently selected.
         this._selectedEndpoints = [];
@@ -169,6 +205,23 @@ export class ReceiveVideoController {
         this._conference.on(
             JitsiConferenceEvents._MEDIA_SESSION_STARTED,
             session => this._onMediaSessionStarted(session));
+    }
+
+    /**
+     * Returns a map of all the remote source names and the corresponding max frame heights.
+     *
+     * @param {number} maxFrameHeight
+     * @returns
+     */
+    _getDefaultSourceReceiverConstraints(mediaSession, maxFrameHeight) {
+        const remoteVideoTracks = mediaSession.peerconnection?.getRemoteTracks(null, MediaType.VIDEO) || [];
+        const receiverConstraints = new Map();
+
+        for (const track of remoteVideoTracks) {
+            receiverConstraints.set(track.getSourceName(), maxFrameHeight);
+        }
+
+        return receiverConstraints;
     }
 
     /**
@@ -180,7 +233,21 @@ export class ReceiveVideoController {
      * @private
      */
     _onMediaSessionStarted(mediaSession) {
-        this._maxFrameHeight && mediaSession.setReceiverVideoConstraint(this._maxFrameHeight);
+        if (mediaSession.isP2P || !this._receiverVideoConstraints) {
+            mediaSession.setReceiverVideoConstraint(this._maxFrameHeight, this._sourceReceiverConstraints);
+        } else {
+            this._receiverVideoConstraints.updateReceiveResolution(this._maxFrameHeight);
+            this._rtc.setNewReceiverVideoConstraints(this._receiverVideoConstraints.constraints);
+        }
+    }
+
+    /**
+     * Returns the lastN value for the conference.
+     *
+     * @returns {number}
+     */
+    getLastN() {
+        return this._lastN;
     }
 
     /**
@@ -194,11 +261,17 @@ export class ReceiveVideoController {
         this._selectedEndpoints = ids;
 
         if (this._receiverVideoConstraints) {
-            const remoteEndpointIds = ids.filter(id => id !== this._conference.myUserId());
-
             // Filter out the local endpointId from the list of selected endpoints.
+            const remoteEndpointIds = ids.filter(id => id !== this._conference.myUserId());
+            const oldConstraints = JSON.parse(JSON.stringify(this._receiverVideoConstraints.constraints));
+
             remoteEndpointIds.length && this._receiverVideoConstraints.updateSelectedEndpoints(remoteEndpointIds);
-            this._rtc.setNewReceiverVideoConstraints(this._receiverVideoConstraints.constraints);
+            const newConstraints = this._receiverVideoConstraints.constraints;
+
+            // Send bridge message only when the constraints change.
+            if (!isEqual(newConstraints, oldConstraints)) {
+                this._rtc.setNewReceiverVideoConstraints(newConstraints);
+            }
 
             return;
         }
@@ -237,15 +310,60 @@ export class ReceiveVideoController {
     setPreferredReceiveMaxFrameHeight(maxFrameHeight) {
         this._maxFrameHeight = maxFrameHeight;
 
-        for (const session of this._conference._getMediaSessions()) {
+        for (const session of this._conference.getMediaSessions()) {
             if (session.isP2P || !this._receiverVideoConstraints) {
-                maxFrameHeight && session.setReceiverVideoConstraint(maxFrameHeight);
+                session.setReceiverVideoConstraint(
+                    maxFrameHeight,
+                    this._getDefaultSourceReceiverConstraints(this._maxFrameHeight));
             } else {
                 const resolutionUpdated = this._receiverVideoConstraints.updateReceiveResolution(maxFrameHeight);
 
                 resolutionUpdated
                     && this._rtc.setNewReceiverVideoConstraints(this._receiverVideoConstraints.constraints);
             }
+        }
+    }
+
+    /**
+     * Sets the receiver constraints for the conference.
+     *
+     * @param {Object} constraints The video constraints.
+     */
+    setReceiverConstraints(constraints) {
+        if (!constraints) {
+            return;
+        }
+        const isEndpointsFormat = Object.keys(constraints).includes('onStageEndpoints', 'selectedEndpoints');
+
+        if (isEndpointsFormat) {
+            throw new Error(
+                '"onStageEndpoints" and "selectedEndpoints" are not supported when sourceNameSignaling is enabled.'
+            );
+        }
+        const constraintsChanged = this._receiverVideoConstraints.updateReceiverVideoConstraints(constraints);
+
+        if (constraintsChanged) {
+            this._lastN = constraints.lastN ?? this._lastN;
+            this._selectedEndpoints = constraints.selectedEndpoints ?? this._selectedEndpoints;
+            this._rtc.setNewReceiverVideoConstraints(constraints);
+
+            const p2pSession = this._conference.getMediaSessions().find(session => session.isP2P);
+
+            if (!p2pSession) {
+                return;
+            }
+
+            const mappedConstraints = Array.from(Object.entries(constraints.constraints))
+                .map(constraint => {
+                    constraint[1] = constraint[1].maxHeight;
+
+                    return constraint;
+                });
+
+            this._sourceReceiverConstraints = new Map(mappedConstraints);
+
+            // Send the receiver constraints to the peer through a "content-modify" message.
+            p2pSession.setReceiverVideoConstraint(null, this._sourceReceiverConstraints);
         }
     }
 }

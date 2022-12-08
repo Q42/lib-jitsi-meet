@@ -1,7 +1,7 @@
-import { getLogger } from 'jitsi-meet-logger';
+import { getLogger } from '@jitsi/logger';
 
 import * as ConferenceEvents from '../../JitsiConferenceEvents';
-import * as MediaType from '../../service/RTC/MediaType';
+import { MediaType } from '../../service/RTC/MediaType';
 import * as ConnectionQualityEvents from '../../service/connectivity/ConnectionQualityEvents';
 import { createAudioOutputProblemEvent } from '../../service/statistics/AnalyticsEvents';
 
@@ -23,7 +23,7 @@ export default class AudioOutputProblemDetector {
     /**
      * Creates new <tt>AudioOutputProblemDetector</tt> instance.
      *
-     * @param {JitsiCofnerence} conference - The conference instance to be monitored.
+     * @param {JitsiConference} conference - The conference instance to be monitored.
      */
     constructor(conference) {
         this._conference = conference;

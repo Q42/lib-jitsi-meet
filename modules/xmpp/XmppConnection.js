@@ -1,4 +1,4 @@
-import { getLogger } from 'jitsi-meet-logger';
+import { getLogger } from '@jitsi/logger';
 import { $pres, Strophe } from 'strophe.js';
 import 'strophejs-plugin-stream-management';
 
@@ -67,8 +67,8 @@ export default class XmppConnection extends Listenable {
         // The default maxRetries is 5, which is too long.
         this._stropheConn.maxRetries = 3;
 
-        this._lastSuccessTracker = new LastSuccessTracker();
-        this._lastSuccessTracker.startTracking(this, this._stropheConn);
+        this._rawInputTracker = new LastSuccessTracker();
+        this._rawInputTracker.startTracking(this, this._stropheConn);
 
         this._resumeTask = new ResumeTask(this._stropheConn);
 
@@ -198,6 +198,19 @@ export default class XmppConnection extends Listenable {
      */
     get service() {
         return this._stropheConn.service;
+    }
+
+    /**
+     * Sets new value for shard.
+     * @param value the new shard value.
+     */
+    set shard(value) {
+        this._options.shard = value;
+
+        // shard setting changed so let's schedule a new keep-alive check if connected
+        if (this._oneSuccessfulConnect) {
+            this._maybeStartWSKeepAlive();
+        }
     }
 
     /**
@@ -348,7 +361,16 @@ export default class XmppConnection extends Listenable {
      * @returns {number|null}
      */
     getTimeSinceLastSuccess() {
-        return this._lastSuccessTracker.getTimeSinceLastSuccess();
+        return this._rawInputTracker.getTimeSinceLastSuccess();
+    }
+
+    /**
+     * See {@link LastRequestTracker.getLastFailedMessage}.
+     *
+     * @returns {string|null}
+     */
+    getLastFailedMessage() {
+        return this._rawInputTracker.getLastFailedMessage();
     }
 
     /**

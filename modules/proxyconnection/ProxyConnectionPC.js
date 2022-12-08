@@ -1,11 +1,12 @@
-import { getLogger } from 'jitsi-meet-logger';
+import { getLogger } from '@jitsi/logger';
 
 import RTCEvents from '../../service/RTC/RTCEvents';
-import XMPPEvents from '../../service/xmpp/XMPPEvents';
+import { XMPPEvents } from '../../service/xmpp/XMPPEvents';
 import RTC from '../RTC/RTC';
 import JingleSessionPC from '../xmpp/JingleSessionPC';
 import { DEFAULT_STUN_SERVERS } from '../xmpp/xmpp';
 
+import CustomSignalingLayer from './CustomSignalingLayer';
 import { ACTIONS } from './constants';
 
 const logger = getLogger(__filename);
@@ -22,24 +23,20 @@ export default class ProxyConnectionPC {
      * Initializes a new {@code ProxyConnectionPC} instance.
      *
      * @param {Object} options - Values to initialize the instance with.
-     * @param {Object} [options.iceConfig] - The {@code RTCConfiguration} to use
-     * for the peer connection.
-     * @param {boolean} [options.isInitiator] - If true, the local client should
-     * send offers. If false, the local client should send answers. Defaults to
-     * false.
-     * @param {Function} options.onRemoteStream - Callback to invoke when a
-     * remote media stream has been received through the peer connection.
-     * @param {string} options.peerJid - The jid of the remote client with which
-     * the peer connection is being establish and which should receive direct
-     * messages regarding peer connection updates.
-     * @param {boolean} [options.receiveVideo] - Whether or not the peer
-     * connection should accept incoming video streams. Defaults to false.
-     * @param {Function} options.onSendMessage - Callback to invoke when a
-     * message has to be sent (signaled) out.
+     * @param {Object} [options.pcConfig] - The {@code RTCConfiguration} to use for the WebRTC peer connection.
+     * @param {boolean} [options.isInitiator] - If true, the local client should send offers. If false, the local
+     * client should send answers. Defaults to false.
+     * @param {Function} options.onRemoteStream - Callback to invoke when a remote media stream has been received
+     * through the peer connection.
+     * @param {string} options.peerJid - The jid of the remote client with which the peer connection is being establish
+     * and which should receive direct messages regarding peer connection updates.
+     * @param {boolean} [options.receiveVideo] - Whether or not the peer connection should accept incoming video
+     * streams. Defaults to false.
+     * @param {Function} options.onSendMessage - Callback to invoke when a message has to be sent (signaled) out.
      */
     constructor(options = {}) {
         this._options = {
-            iceConfig: {},
+            pcConfig: {},
             isInitiator: false,
             receiveAudio: false,
             receiveVideo: false,
@@ -185,9 +182,9 @@ export default class ProxyConnectionPC {
          *
          * @type {Object}
          */
-        const iceConfigStub = {
+        const pcConfigStub = {
             iceServers: DEFAULT_STUN_SERVERS,
-            ...this._options.iceConfig
+            ...this._options.pcConfig
         };
 
         /**
@@ -220,22 +217,22 @@ export default class ProxyConnectionPC {
          * @type {Object}
          */
         const roomStub = {
-            addPresenceListener: () => { /** no-op */ },
+            addEventListener: () => { /* no op */ },
+            addPresenceListener: () => { /* no-op */ },
             connectionTimes: [],
             eventEmitter: { emit: emitter },
-            getMediaPresenceInfo: () => {
-                // Errors occur if this function does not return an object
-
-                return {};
-            },
-            removePresenceListener: () => { /** no-op */ }
+            removeEventListener: () => { /* no op */ },
+            removePresenceListener: () => { /* no-op */ },
+            supportsRestartByTerminate: () => false
         };
 
         /**
          * A {@code JitsiConference} stub passed to the {@link RTC} module.
          * @type {Object}
          */
-        const conferenceStub = {};
+        const conferenceStub = {
+            myUserId: () => ''
+        };
 
         /**
          * Create an instance of {@code RTC} as it is required for peer
@@ -264,16 +261,20 @@ export default class ProxyConnectionPC {
                 offerToReceiveAudio: this._options.receiveAudio,
                 offerToReceiveVideo: this._options.receiveVideo
             }, // mediaConstraints
-            iceConfigStub, // iceConfig
+            pcConfigStub, // pcConfig
             true, // isP2P
             this._options.isInitiator // isInitiator
         );
+
+        const signalingLayer = new CustomSignalingLayer();
+
+        signalingLayer.setChatRoom(roomStub);
 
         /**
          * An additional initialize call is necessary to properly set instance
          * variable for calling.
          */
-        peerConnection.initialize(roomStub, this._rtc, configStub);
+        peerConnection.initialize(roomStub, this._rtc, signalingLayer, configStub);
 
         return peerConnection;
     }

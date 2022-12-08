@@ -4,7 +4,7 @@ import * as JitsiMediaDevicesEvents from './JitsiMediaDevicesEvents';
 import RTC from './modules/RTC/RTC';
 import browser from './modules/browser';
 import Statistics from './modules/statistics/statistics';
-import * as MediaType from './service/RTC/MediaType';
+import { MediaType } from './service/RTC/MediaType';
 import RTCEvents from './service/RTC/RTCEvents';
 
 const AUDIO_PERMISSION_NAME = 'microphone';
@@ -257,13 +257,15 @@ class JitsiMediaDevices {
     }
 
     /**
-     * Returns true if it is possible to be simultaneously capturing audio
-     * from more than one device.
+     * Returns true if it is possible to be simultaneously capturing audio from more than one device.
      *
      * @returns {boolean}
      */
     isMultipleAudioInputSupported() {
-        return !browser.isFirefox();
+        return !(
+            (browser.isFirefox() && browser.isVersionLessThan('101'))
+            || browser.isIosBrowser()
+        );
     }
 
     /**

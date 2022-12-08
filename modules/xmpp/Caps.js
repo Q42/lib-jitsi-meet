@@ -1,8 +1,7 @@
-/* global $ */
+import $ from 'jquery';
+import { Strophe, b64_sha1 } from 'strophe.js'; // eslint-disable-line camelcase
 
-import { b64_sha1, Strophe } from 'strophe.js'; // eslint-disable-line camelcase
-
-import XMPPEvents from '../../service/xmpp/XMPPEvents';
+import { XMPPEvents } from '../../service/xmpp/XMPPEvents';
 import Listenable from '../util/Listenable';
 
 /**
@@ -48,6 +47,30 @@ function generateSha(identities, features) {
         (tmp, feature) => `${tmp + feature}<`, '');
 
     return b64_sha1(sortedIdentities + sortedFeatures);
+}
+
+/**
+ * Parses the disco-info node and returns the sets of features and identities.
+ * @param {String} node The node with results to parse.
+ * @returns {{features: Set<any>, identities: Set<any>}}
+ */
+export function parseDiscoInfo(node) {
+    const features = new Set();
+    const identities = new Set();
+
+    $(node).find('>query>feature')
+        .each((_, el) => features.add(el.getAttribute('var')));
+    $(node).find('>query>identity')
+        .each((_, el) => identities.add({
+            type: el.getAttribute('type'),
+            name: el.getAttribute('name'),
+            category: el.getAttribute('category')
+        }));
+
+    return {
+        features,
+        identities
+    };
 }
 
 /**
@@ -162,7 +185,7 @@ export default class Caps extends Listenable {
                 });
             });
 
-            room.addToPresence('features', { children });
+            room.addOrReplaceInPresence('features', { children });
         }
     }
 
@@ -187,24 +210,7 @@ export default class Caps extends Listenable {
     _getDiscoInfo(jid, node, timeout) {
         return new Promise((resolve, reject) =>
             this.disco.info(jid, node, response => {
-                const features = new Set();
-                const identities = new Set();
-
-                $(response)
-                    .find('>query>feature')
-                    .each(
-                        (_, el) => features.add(el.getAttribute('var')));
-                $(response)
-                    .find('>query>identity')
-                    .each(
-                        (_, el) => identities.add({
-                            type: el.getAttribute('type'),
-                            name: el.getAttribute('name'),
-                            category: el.getAttribute('category')
-                        }));
-                resolve({
-                    features,
-                    identities });
+                resolve(parseDiscoInfo(response));
             }, reject, timeout)
         );
     }
@@ -235,7 +241,7 @@ export default class Caps extends Listenable {
      * @param {ChatRoom} room the room.
      */
     _fixChatRoomPresenceMap(room) {
-        room.addToPresence('c', {
+        room.addOrReplaceInPresence('c', {
             attributes: {
                 xmlns: Strophe.NS.CAPS,
                 hash: HASH,

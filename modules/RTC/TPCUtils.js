@@ -1,15 +1,25 @@
-import { getLogger } from 'jitsi-meet-logger';
+import { getLogger } from '@jitsi/logger';
 import transform from 'sdp-transform';
 
-import * as MediaType from '../../service/RTC/MediaType';
-import RTCEvents from '../../service/RTC/RTCEvents';
+import { MediaDirection } from '../../service/RTC/MediaDirection';
+import { MediaType } from '../../service/RTC/MediaType';
+import { getSourceIndexFromSourceName } from '../../service/RTC/SignalingLayer';
+import { VideoType } from '../../service/RTC/VideoType';
 import browser from '../browser';
+import FeatureFlags from '../flags/FeatureFlags';
 
 const logger = getLogger(__filename);
+const DESKTOP_SHARE_RATE = 500000;
+const LD_BITRATE = 200000;
+const SD_BITRATE = 700000;
 const SIM_LAYER_1_RID = '1';
 const SIM_LAYER_2_RID = '2';
 const SIM_LAYER_3_RID = '3';
 
+export const HD_BITRATE = 2500000;
+export const HD_SCALE_FACTOR = 1;
+export const LD_SCALE_FACTOR = 4;
+export const SD_SCALE_FACTOR = 2;
 export const SIM_LAYER_RIDS = [ SIM_LAYER_1_RID, SIM_LAYER_2_RID, SIM_LAYER_3_RID ];
 
 /**
@@ -21,12 +31,21 @@ export class TPCUtils {
      * Creates a new instance for a given TraceablePeerConnection
      *
      * @param peerconnection - the tpc instance for which we have utility functions.
-     * @param videoBitrates - the bitrates to be configured on the video senders for
-     * different resolutions both in unicast and simulcast mode.
      */
-    constructor(peerconnection, videoBitrates) {
+    constructor(peerconnection) {
         this.pc = peerconnection;
-        this.videoBitrates = videoBitrates.VP8 || videoBitrates;
+        const bitrateSettings = this.pc.options?.videoQuality?.maxBitratesVideo;
+        const standardBitrates = {
+            low: LD_BITRATE,
+            standard: SD_BITRATE,
+            high: HD_BITRATE
+        };
+
+        // Check if the max. bitrates for video are specified through config.js videoQuality settings.
+        // Right now only VP8 bitrates are configured on the simulcast encodings, VP9 bitrates have to be
+        // configured on the SDP using b:AS line.
+        this.videoBitrates = bitrateSettings ?? standardBitrates;
+        const encodingBitrates = this.videoBitrates.VP8 ?? this.videoBitrates;
 
         /**
          * The startup configuration for the stream encodings that are applicable to
@@ -44,57 +63,23 @@ export class TPCUtils {
         this.localStreamEncodingsConfig = [
             {
                 active: true,
-                maxBitrate: browser.isFirefox() ? this.videoBitrates.high : this.videoBitrates.low,
+                maxBitrate: browser.isFirefox() ? encodingBitrates.high : encodingBitrates.low,
                 rid: SIM_LAYER_1_RID,
-                scaleResolutionDownBy: browser.isFirefox() ? 1.0 : 4.0
+                scaleResolutionDownBy: browser.isFirefox() ? HD_SCALE_FACTOR : LD_SCALE_FACTOR
             },
             {
                 active: true,
-                maxBitrate: this.videoBitrates.standard,
+                maxBitrate: encodingBitrates.standard,
                 rid: SIM_LAYER_2_RID,
-                scaleResolutionDownBy: 2.0
+                scaleResolutionDownBy: SD_SCALE_FACTOR
             },
             {
                 active: true,
-                maxBitrate: browser.isFirefox() ? this.videoBitrates.low : this.videoBitrates.high,
+                maxBitrate: browser.isFirefox() ? encodingBitrates.low : encodingBitrates.high,
                 rid: SIM_LAYER_3_RID,
-                scaleResolutionDownBy: browser.isFirefox() ? 4.0 : 1.0
+                scaleResolutionDownBy: browser.isFirefox() ? LD_SCALE_FACTOR : HD_SCALE_FACTOR
             }
         ];
-    }
-
-    /**
-     * Ensures that the ssrcs associated with a FID ssrc-group appear in the correct order, i.e.,
-     * the primary ssrc first and the secondary rtx ssrc later. This is important for unified
-     * plan since we have only one FID group per media description.
-     * @param {Object} description the webRTC session description instance for the remote
-     * description.
-     * @private
-     */
-    ensureCorrectOrderOfSsrcs(description) {
-        const parsedSdp = transform.parse(description.sdp);
-
-        parsedSdp.media.forEach(mLine => {
-            if (mLine.type === 'audio') {
-                return;
-            }
-            if (!mLine.ssrcGroups || !mLine.ssrcGroups.length) {
-                return;
-            }
-            let reorderedSsrcs = [];
-
-            mLine.ssrcGroups[0].ssrcs.split(' ').forEach(ssrc => {
-                const sources = mLine.ssrcs.filter(source => source.id.toString() === ssrc);
-
-                reorderedSsrcs = reorderedSsrcs.concat(sources);
-            });
-            mLine.ssrcs = reorderedSsrcs;
-        });
-
-        return new RTCSessionDescription({
-            type: description.type,
-            sdp: transform.write(parsedSdp)
-        });
     }
 
     /**
@@ -116,6 +101,64 @@ export class TPCUtils {
     }
 
     /**
+     * Ensures that the ssrcs associated with a FID ssrc-group appear in the correct order, i.e.,
+     * the primary ssrc first and the secondary rtx ssrc later. This is important for unified
+     * plan since we have only one FID group per media description.
+     * @param {Object} description the webRTC session description instance for the remote
+     * description.
+     * @private
+     */
+    ensureCorrectOrderOfSsrcs(description) {
+        const parsedSdp = transform.parse(description.sdp);
+
+        parsedSdp.media.forEach(mLine => {
+            if (mLine.type === MediaType.AUDIO) {
+                return;
+            }
+            if (!mLine.ssrcGroups || !mLine.ssrcGroups.length) {
+                return;
+            }
+            let reorderedSsrcs = [];
+
+            const ssrcs = new Set();
+
+            mLine.ssrcGroups.map(group =>
+                group.ssrcs
+                    .split(' ')
+                    .filter(Boolean)
+                    .forEach(ssrc => ssrcs.add(ssrc))
+            );
+
+            ssrcs.forEach(ssrc => {
+                const sources = mLine.ssrcs.filter(source => source.id.toString() === ssrc);
+
+                reorderedSsrcs = reorderedSsrcs.concat(sources);
+            });
+            mLine.ssrcs = reorderedSsrcs;
+        });
+
+        return new RTCSessionDescription({
+            type: description.type,
+            sdp: transform.write(parsedSdp)
+        });
+    }
+
+    /**
+     * Returns the transceiver associated with a given RTCRtpSender/RTCRtpReceiver.
+     *
+     * @param {string} mediaType - type of track associated with the transceiver 'audio' or 'video'.
+     * @param {JitsiLocalTrack} localTrack - local track to be used for lookup.
+     * @returns {RTCRtpTransceiver}
+     */
+    findTransceiver(mediaType, localTrack = null) {
+        const transceiver = localTrack?.track && localTrack.getOriginalStream()
+            ? this.pc.peerconnection.getTransceivers().find(t => t.sender?.track?.id === localTrack.getTrackId())
+            : this.pc.peerconnection.getTransceivers().find(t => t.receiver?.track?.kind === mediaType);
+
+        return transceiver;
+    }
+
+    /**
      * Takes in a *unified plan* offer and inserts the appropriate
      * parameters for adding simulcast receive support.
      * @param {Object} desc - A session description object
@@ -126,20 +169,19 @@ export class TPCUtils {
      * with its sdp field modified to advertise simulcast receive support
      */
     insertUnifiedPlanSimulcastReceive(desc) {
-        // a=simulcast line is not needed on browsers where
-        // we munge SDP for turning on simulcast. Remove this check
-        // when we move to RID/MID based simulcast on all browsers.
+        // a=simulcast line is not needed on browsers where we SDP munging is used for enabling on simulcast.
+        // Remove this check when the client switches to RID/MID based simulcast on all browsers.
         if (browser.usesSdpMungingForSimulcast()) {
             return desc;
         }
         const sdp = transform.parse(desc.sdp);
-        const idx = sdp.media.findIndex(mline => mline.type === 'video');
+        const idx = sdp.media.findIndex(mline => mline.type === MediaType.VIDEO);
 
         if (sdp.media[idx].rids && (sdp.media[idx].simulcast_03 || sdp.media[idx].simulcast)) {
             // Make sure we don't have the simulcast recv line on video descriptions other than
             // the first video description.
             sdp.media.forEach((mline, i) => {
-                if (mline.type === 'video' && i !== idx) {
+                if (mline.type === MediaType.VIDEO && i !== idx) {
                     sdp.media[i].rids = undefined;
                     sdp.media[i].simulcast = undefined;
 
@@ -191,19 +233,24 @@ export class TPCUtils {
     /**
     * Adds {@link JitsiLocalTrack} to the WebRTC peerconnection for the first time.
     * @param {JitsiLocalTrack} track - track to be added to the peerconnection.
-    * @param {boolean} isInitiator - boolean that indicates if the endpoint is offerer
-    * in a p2p connection.
+    * @param {boolean} isInitiator - boolean that indicates if the endpoint is offerer in a p2p connection.
     * @returns {void}
     */
     addTrack(localTrack, isInitiator) {
         const track = localTrack.getTrack();
 
         if (isInitiator) {
+            const streams = [];
+
+            if (localTrack.getOriginalStream()) {
+                streams.push(localTrack.getOriginalStream());
+            }
+
             // Use pc.addTransceiver() for the initiator case when local tracks are getting added
             // to the peerconnection before a session-initiate is sent over to the peer.
             const transceiverInit = {
-                direction: 'sendrecv',
-                streams: [ localTrack.getOriginalStream() ],
+                direction: MediaDirection.SENDRECV,
+                streams,
                 sendEncodings: []
             };
 
@@ -220,151 +267,147 @@ export class TPCUtils {
     }
 
     /**
-     * Adds a track on the RTCRtpSender as part of the unmute operation.
-     * @param {JitsiLocalTrack} localTrack - track to be unmuted.
-     * @returns {Promise<void>} - resolved when done.
+     * Returns the calculated active state of the simulcast encodings based on the frame height requested for the send
+     * stream. All the encodings that have a resolution lower than the frame height requested will be enabled.
+     *
+     * @param {JitsiLocalTrack} localVideoTrack The local video track.
+     * @param {number} newHeight The resolution requested for the video track.
+     * @returns {Array<boolean>}
      */
-    addTrackUnmute(localTrack) {
-        const mediaType = localTrack.getType();
-        const track = localTrack.getTrack();
+    calculateEncodingsActiveState(localVideoTrack, newHeight) {
+        const localTrack = localVideoTrack.getTrack();
+        const { height } = localTrack.getSettings();
+        const encodingsState = this.localStreamEncodingsConfig
+        .map(encoding => height / encoding.scaleResolutionDownBy)
+        .map((frameHeight, idx) => {
+            let active = localVideoTrack.getVideoType() === VideoType.CAMERA
 
-        // The assumption here is that the first transceiver of the specified
-        // media type is that of the local track.
-        const transceiver = this.pc.peerconnection.getTransceivers()
-            .find(t => t.receiver && t.receiver.track && t.receiver.track.kind === mediaType);
+                // Keep the LD stream enabled even when the LD stream's resolution is higher than of the requested
+                // resolution. This can happen when camera is captured at resolutions higher than 720p but the
+                // requested resolution is 180. Since getParameters doesn't give us information about the resolutions
+                // of the simulcast encodings, we have to rely on our initial config for the simulcast streams.
+                ? newHeight > 0 && this.localStreamEncodingsConfig[idx]?.scaleResolutionDownBy === LD_SCALE_FACTOR
+                    ? true
+                    : frameHeight <= newHeight
 
-        if (!transceiver) {
-            return Promise.reject(new Error(`RTCRtpTransceiver for ${mediaType} not found`));
-        }
-        logger.debug(`Adding ${localTrack} on ${this.pc}`);
+                // Keep all the encodings for desktop track active.
+                : true;
 
-        // If the client starts with audio/video muted setting, the transceiver direction
-        // will be set to 'recvonly'. Use addStream here so that a MSID is generated for the stream.
-        if (transceiver.direction === 'recvonly') {
-            const stream = localTrack.getOriginalStream();
-
-            if (stream) {
-                this.pc.peerconnection.addStream(localTrack.getOriginalStream());
-
-                return this.setEncodings(localTrack).then(() => {
-                    this.pc.localTracks.set(localTrack.rtcId, localTrack);
-                    transceiver.direction = 'sendrecv';
-                });
+            // Disable the lower spatial layers for screensharing in Unified plan when low fps screensharing is in
+            // progress. Sending all three streams often results in the browser suspending the high resolution in low
+            // b/w and cpu cases, especially on the low end machines. Suspending the low resolution streams ensures
+            // that the highest resolution stream is available always. Safari is an exception here since it does not
+            // send the desktop stream at all if only the high resolution stream is enabled.
+            if (localVideoTrack.getVideoType() === VideoType.DESKTOP
+                && this.pc._capScreenshareBitrate
+                && this.pc.usesUnifiedPlan()
+                && !browser.isWebKitBased()
+                && this.localStreamEncodingsConfig[idx].scaleResolutionDownBy !== HD_SCALE_FACTOR) {
+                active = false;
             }
 
-            return Promise.resolve();
-        }
+            return active;
+        });
 
-        return transceiver.sender.replaceTrack(track);
+        return encodingsState;
     }
 
     /**
-     * Obtains the current local video track's height constraints based on the
-     * initial stream encodings configuration on the sender and the resolution
-     * of the current local track added to the peerconnection.
-     * @param {MediaStreamTrack} localTrack local video track
-     * @returns {Array[number]} an array containing the resolution heights of
-     * simulcast streams configured on the video sender.
+     * Returns the calculates max bitrates that need to be configured on the simulcast encodings based on the video
+     * type and other considerations associated with screenshare.
+     *
+     * @param {JitsiLocalTrack} localVideoTrack The local video track.
+     * @returns {Array<number>}
      */
-    getLocalStreamHeightConstraints(localTrack) {
-        // React-native hasn't implemented MediaStreamTrack getSettings yet.
-        if (browser.isReactNative()) {
-            return null;
-        }
+    calculateEncodingsBitrates(localVideoTrack) {
+        const videoType = localVideoTrack.getVideoType();
+        const desktopShareBitrate = this.pc.options?.videoQuality?.desktopBitrate || DESKTOP_SHARE_RATE;
+        const lowFpsScreenshare = localVideoTrack.getVideoType() === VideoType.DESKTOP
+            && this.pc._capScreenshareBitrate
+            && !browser.isWebKitBased();
+        const encodingsBitrates = this.localStreamEncodingsConfig
+        .map(encoding => {
+            const bitrate = lowFpsScreenshare
+                ? desktopShareBitrate
 
-        const localVideoHeightConstraints = [];
+                // For high fps screenshare, 'maxBitrate' setting must be cleared on Chrome in plan-b, because
+                // if simulcast is enabled for screen and maxBitrates are set then Chrome will not send the
+                // desktop stream.
+                : videoType === VideoType.DESKTOP && browser.isChromiumBased() && !this.pc.usesUnifiedPlan()
+                    ? undefined
+                    : encoding.maxBitrate;
 
-        // Firefox doesn't return the height of the desktop track, assume a min. height of 720.
-        const { height = 720 } = localTrack.getSettings();
+            return bitrate;
+        });
 
-        for (const encoding of this.localStreamEncodingsConfig) {
-            localVideoHeightConstraints.push(height / encoding.scaleResolutionDownBy);
-        }
-
-        return localVideoHeightConstraints;
-    }
-
-    /**
-     * Removes the track from the RTCRtpSender as part of the mute operation.
-     * @param {JitsiLocalTrack} localTrack - track to be removed.
-     * @returns {Promise<void>} - resolved when done.
-     */
-    removeTrackMute(localTrack) {
-        const mediaType = localTrack.getType();
-        const transceiver = this.pc.peerconnection.getTransceivers()
-            .find(t => t.sender && t.sender.track && t.sender.track.id === localTrack.getTrackId());
-
-        if (!transceiver) {
-            return Promise.reject(new Error(`RTCRtpTransceiver for ${mediaType} not found`));
-        }
-
-        logger.debug(`Removing ${localTrack} on ${this.pc}`);
-
-        return transceiver.sender.replaceTrack(null);
+        return encodingsBitrates;
     }
 
     /**
      * Replaces the existing track on a RTCRtpSender with the given track.
+     *
      * @param {JitsiLocalTrack} oldTrack - existing track on the sender that needs to be removed.
      * @param {JitsiLocalTrack} newTrack - new track that needs to be added to the sender.
-     * @returns {Promise<void>} - resolved when done.
+     * @returns {Promise<RTCRtpTransceiver>} - resolved with the associated transceiver when done, rejected otherwise.
      */
     replaceTrack(oldTrack, newTrack) {
-        if (oldTrack && newTrack) {
-            const mediaType = newTrack.getType();
-            const stream = newTrack.getOriginalStream();
+        const mediaType = newTrack?.getType() ?? oldTrack?.getType();
+        const localTracks = this.pc.getLocalTracks(mediaType);
+        const track = newTrack?.getTrack() ?? null;
+        const isNewLocalSource = FeatureFlags.isMultiStreamSendSupportEnabled()
+            && localTracks?.length
+            && !oldTrack
+            && newTrack
+            && !localTracks.find(t => t === newTrack);
+        let transceiver;
 
-            // Ignore cases when the track is replaced while the device is in a muted state,like
-            // replacing camera when video muted or replacing mic when audio muted. These JitsiLocalTracks
-            // do not have a mediastream attached. Replace track will be called again when the device is
-            // unmuted and the track will be replaced on the peerconnection then.
-            if (!stream) {
-                this.pc.localTracks.delete(oldTrack.rtcId);
-                this.pc.localTracks.set(newTrack.rtcId, newTrack);
+        // If old track exists, replace the track on the corresponding sender.
+        if (oldTrack && !oldTrack.isMuted()) {
+            transceiver = this.pc.peerconnection.getTransceivers().find(t => t.sender.track === oldTrack.getTrack());
 
-                return Promise.resolve();
+        // Find the first recvonly transceiver when more than one track of the same media type is being added to the pc.
+        // As part of the track addition, a new m-line was added to the remote description with direction set to
+        // recvonly.
+        } else if (isNewLocalSource) {
+            transceiver = this.pc.peerconnection.getTransceivers().find(
+                t => t.receiver.track.kind === mediaType
+                && t.direction === MediaDirection.RECVONLY
+
+                // Re-use any existing recvonly transceiver (if available) for p2p case.
+                && ((this.pc.isP2P && t.currentDirection === MediaDirection.RECVONLY)
+                    || (t.currentDirection === MediaDirection.INACTIVE && !t.stopped)));
+
+        // For mute/unmute operations, find the transceiver based on the track index in the source name if present,
+        // otherwise it is assumed to be the first local track that was added to the peerconnection.
+        } else {
+            transceiver = this.pc.peerconnection.getTransceivers().find(t => t.receiver.track.kind === mediaType);
+            const sourceName = newTrack?.getSourceName() ?? oldTrack?.getSourceName();
+
+            if (sourceName) {
+                const trackIndex = getSourceIndexFromSourceName(sourceName);
+
+                if (this.pc.isP2P) {
+                    transceiver = this.pc.peerconnection.getTransceivers()
+                        .filter(t => t.receiver.track.kind === mediaType)[trackIndex];
+                } else if (oldTrack) {
+                    const transceiverMid = this.pc._localTrackTransceiverMids.get(oldTrack.rtcId);
+
+                    transceiver = this.pc.peerconnection.getTransceivers().find(t => t.mid === transceiverMid);
+                } else if (trackIndex) {
+                    transceiver = this.pc.peerconnection.getTransceivers()
+                            .filter(t => t.receiver.track.kind === mediaType
+                                && t.direction !== MediaDirection.RECVONLY)[trackIndex];
+                }
             }
-            const track = mediaType === MediaType.AUDIO
-                ? stream.getAudioTracks()[0]
-                : stream.getVideoTracks()[0];
-            const transceiver = this.pc.peerconnection.getTransceivers()
-                .find(t => t.receiver.track.kind === mediaType && !t.stopped);
-
-            if (!transceiver) {
-                return Promise.reject(new Error('replace track failed'));
-            }
-            logger.debug(`Replacing ${oldTrack} with ${newTrack} on ${this.pc}`);
-
-            return transceiver.sender.replaceTrack(track)
-                .then(() => {
-                    const ssrc = this.pc.localSSRCs.get(oldTrack.rtcId);
-
-                    this.pc.localTracks.delete(oldTrack.rtcId);
-                    this.pc.localSSRCs.delete(oldTrack.rtcId);
-                    this.pc._addedStreams = this.pc._addedStreams.filter(s => s !== stream);
-                    this.pc.localTracks.set(newTrack.rtcId, newTrack);
-
-                    this.pc._addedStreams.push(stream);
-                    this.pc.localSSRCs.set(newTrack.rtcId, ssrc);
-                    this.pc.eventEmitter.emit(RTCEvents.LOCAL_TRACK_SSRC_UPDATED,
-                        newTrack,
-                        this.pc._extractPrimarySSRC(ssrc));
-                });
-        } else if (oldTrack && !newTrack) {
-            return this.removeTrackMute(oldTrack)
-                .then(() => {
-                    this.pc.localTracks.delete(oldTrack.rtcId);
-                    this.pc.localSSRCs.delete(oldTrack.rtcId);
-                });
-        } else if (newTrack && !oldTrack) {
-            const ssrc = this.pc.localSSRCs.get(newTrack.rtcId);
-
-            return this.addTrackUnmute(newTrack)
-                .then(() => {
-                    this.pc.localTracks.set(newTrack.rtcId, newTrack);
-                    this.pc.localSSRCs.set(newTrack.rtcId, ssrc);
-                });
         }
+        if (!transceiver) {
+            return Promise.reject(
+                new Error(`Replace track failed - no transceiver for old: ${oldTrack}, new: ${newTrack}`));
+        }
+        logger.debug(`${this.pc} Replacing ${oldTrack} with ${newTrack}`);
+
+        return transceiver.sender.replaceTrack(track)
+            .then(() => Promise.resolve(transceiver));
     }
 
     /**
@@ -387,10 +430,16 @@ export class TPCUtils {
      * @returns {Promise<void>} - resolved when done.
      */
     setEncodings(track) {
-        const transceiver = this.pc.peerconnection.getTransceivers()
-            .find(t => t.sender && t.sender.track && t.sender.track.kind === track.getType());
-        const parameters = transceiver.sender.getParameters();
+        const mediaType = track.getType();
+        const transceiver = this.findTransceiver(mediaType, track);
+        const parameters = transceiver?.sender?.getParameters();
 
+        // Resolve if the encodings are not available yet. This happens immediately after the track is added to the
+        // peerconnection on chrome in unified-plan. It is ok to ignore and not report the error here since the
+        // action that triggers 'addTrack' (like unmute) will also configure the encodings and set bitrates after that.
+        if (!parameters?.encodings?.length) {
+            return Promise.resolve();
+        }
         parameters.encodings = this._getStreamEncodings(track);
 
         return transceiver.sender.setParameters(parameters);
@@ -407,19 +456,19 @@ export class TPCUtils {
     setMediaTransferActive(mediaType, active) {
         const transceivers = this.pc.peerconnection.getTransceivers()
             .filter(t => t.receiver && t.receiver.track && t.receiver.track.kind === mediaType);
-        const localTracks = this.pc.getLocalTracks(mediaType);
 
-        logger.info(`${active ? 'Enabling' : 'Suspending'} ${mediaType} media transfer on ${this.pc}`);
-        transceivers.forEach((transceiver, idx) => {
+        logger.info(`${this.pc} ${active ? 'Enabling' : 'Suspending'} ${mediaType} media transfer.`);
+        transceivers.forEach(transceiver => {
             if (active) {
-                // The first transceiver is for the local track and only this one can be set to 'sendrecv'
-                if (idx === 0 && localTracks.length) {
-                    transceiver.direction = 'sendrecv';
+                const localTrackMids = Array.from(this.pc._localTrackTransceiverMids);
+
+                if (localTrackMids.find(mids => mids[1] === transceiver.mid)) {
+                    transceiver.direction = MediaDirection.SENDRECV;
                 } else {
-                    transceiver.direction = 'recvonly';
+                    transceiver.direction = MediaDirection.RECVONLY;
                 }
             } else {
-                transceiver.direction = 'inactive';
+                transceiver.direction = MediaDirection.INACTIVE;
             }
         });
     }
@@ -446,7 +495,7 @@ export class TPCUtils {
      * @returns {void}
      */
     updateEncodingsResolution(parameters) {
-        if (!(browser.isSafari() && parameters.encodings && Array.isArray(parameters.encodings))) {
+        if (!(browser.isWebKitBased() && parameters.encodings && Array.isArray(parameters.encodings))) {
             return;
         }
         const allEqualEncodings

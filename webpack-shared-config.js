@@ -1,94 +1,93 @@
 /* global __dirname */
 
+const path = require('path');
 const process = require('process');
+const { ProvidePlugin } = require('webpack');
 const { BundleAnalyzerPlugin } = require('webpack-bundle-analyzer');
 
-const analyzeBundle = process.argv.indexOf('--analyze-bundle') !== -1;
 
-const minimize
-    = process.argv.indexOf('-p') !== -1
-        || process.argv.indexOf('--optimize-minimize') !== -1;
-
-module.exports = {
-    // The inline-source-map is used to allow debugging the unit tests with Karma
-    devtool: minimize ? 'source-map' : 'inline-source-map',
-    mode: minimize ? 'production' : 'development',
-    module: {
-        rules: [ {
-            // Version this build of the lib-jitsi-meet library.
-
-            loader: 'string-replace-loader',
-            options: {
-                flags: 'g',
-                replace:
-                    process.env.LIB_JITSI_MEET_COMMIT_HASH || 'development',
-                search: '{#COMMIT_HASH#}'
+module.exports = (minimize, analyzeBundle) => {
+    return {
+        // The inline-source-map is used to allow debugging the unit tests with Karma
+        devtool: minimize ? 'source-map' : 'inline-source-map',
+        resolve: {
+            alias: {
+                'jquery': require.resolve('jquery/dist/jquery.slim.min.js')
             },
-            test: `${__dirname}/JitsiMeetJS.js`
-        }, {
-            // Transpile ES2015 (aka ES6) to ES5.
+            extensions: [ '', '.js', '.ts' ]
+        },
+        mode: minimize ? 'production' : 'development',
+        module: {
+            rules: [ {
+                // Version this build of the lib-jitsi-meet library.
 
-            exclude: [
-                new RegExp(`${__dirname}/node_modules/(?!@jitsi/js-utils)`)
-            ],
-            loader: 'babel-loader',
-            options: {
-                presets: [
-                    [
-                        '@babel/preset-env',
+                loader: 'string-replace-loader',
+                options: {
+                    flags: 'g',
+                    replace:
+                        process.env.LIB_JITSI_MEET_COMMIT_HASH || 'development',
+                    search: '{#COMMIT_HASH#}'
+                },
+                test: path.join(__dirname, 'JitsiMeetJS.ts')
+            }, {
+                // Transpile ES2015 (aka ES6) to ES5.
 
-                        // Tell babel to avoid compiling imports into CommonJS
-                        // so that webpack may do tree shaking.
-                        {
-                            modules: false,
+                loader: 'babel-loader',
+                options: {
+                    presets: [
+                        [
+                            '@babel/preset-env',
 
-                            // Specify our target browsers so no transpiling is
-                            // done unnecessarily. For browsers not specified
-                            // here, the ES2015+ profile will be used.
-                            targets: {
-                                chrome: 58,
-                                electron: 2,
-                                firefox: 54,
-                                safari: 11
+                            // Tell babel to avoid compiling imports into CommonJS
+                            // so that webpack may do tree shaking.
+                            {
+                                modules: false,
+
+                                // Specify our target browsers so no transpiling is
+                                // done unnecessarily. For browsers not specified
+                                // here, the ES2015+ profile will be used.
+                                targets: {
+                                    chrome: 80,
+                                    electron: 10,
+                                    firefox: 68,
+                                    safari: 14
+                                }
                             }
-                        }
-                    ],
-                    '@babel/preset-flow'
-                ],
-                plugins: [
-                    '@babel/plugin-transform-flow-strip-types',
-                    '@babel/plugin-proposal-class-properties',
-                    '@babel/plugin-proposal-optional-chaining',
-                    '@babel/plugin-proposal-export-namespace-from'
-                ]
-            },
-            test: /\.js$/
-        } ]
-    },
-    node: {
-        // Allow the use of the real filename of the module being executed. By
-        // default Webpack does not leak path-related information and provides a
-        // value that is a mock (/index.js).
-        __filename: true
-    },
-    optimization: {
-        concatenateModules: minimize
-    },
-    output: {
-        filename: `[name]${minimize ? '.min' : ''}.js`,
-        path: process.cwd(),
-        sourceMapFilename: `[name].${minimize ? 'min' : 'js'}.map`
-    },
-    performance: {
-        hints: minimize ? 'error' : false,
-        maxAssetSize: 750 * 1024,
-        maxEntrypointSize: 750 * 1024
-    },
-    plugins: [
-        analyzeBundle
-            && new BundleAnalyzerPlugin({
-                analyzerMode: 'disabled',
-                generateStatsFile: true
-            })
-    ].filter(Boolean)
+                        ],
+                        '@babel/preset-typescript'
+                    ]
+                },
+                test: /\.(js|ts)$/
+            } ]
+        },
+        node: {
+            // Allow the use of the real filename of the module being executed. By
+            // default Webpack does not leak path-related information and provides a
+            // value that is a mock (/index.js).
+            __filename: true
+        },
+        optimization: {
+            concatenateModules: minimize
+        },
+        output: {
+            filename: `[name]${minimize ? '.min' : ''}.js`,
+            sourceMapFilename: `[name].${minimize ? 'min' : 'js'}.map`
+        },
+        performance: {
+            hints: minimize ? 'error' : false,
+            maxAssetSize: 825 * 1024,
+            maxEntrypointSize: 825 * 1024
+        },
+        plugins: [
+            analyzeBundle
+                && new BundleAnalyzerPlugin({
+                    analyzerMode: 'disabled',
+                    generateStatsFile: true
+                }),
+            !minimize
+                && new ProvidePlugin({
+                    process: require.resolve('process/browser')
+                })
+        ].filter(Boolean)
+    };
 };
