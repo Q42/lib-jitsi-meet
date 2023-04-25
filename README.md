@@ -50,11 +50,31 @@ Go to ScreenObtainer.js around line 222 and replace
 
 with 
 ```
-     let video = {
+let video = {
             width: 1280,
-            height: 720
+            height: 720,
+            frameRate: {
+                min: 5,
+                max: 24
+            }
         };
 ```
+
+And comment out lines below where the video.height and video.width is set to 99999
+
+```
+ if (browser.isChromiumBased()) {
+            // Allow users to seamlessly switch which tab they are sharing without having to select the tab again.
+            browser.isVersionGreaterThan(106) && (video.surfaceSwitching = 'include');
+
+            // Set bogus resolution constraints to work around
+            // https://bugs.chromium.org/p/chromium/issues/detail?id=1056311 for low fps screenshare. Capturing SS at
+            // very high resolutions restricts the framerate. Therefore, skip this hack when capture fps > 5 fps.
+            // if (!(desktopSharingFrameRate?.max > SS_DEFAULT_FRAME_RATE)) {
+            //     video.height = 99999;
+            //     video.width = 99999;
+            // }
+        }```
 
 it hardcodes screensharing to 720p, jitsi is a config hell and this is the best option until they allow you to do from config (they do crazy config filtering for desktop)
 
@@ -68,7 +88,7 @@ npm install
 npm run build
 ```
 
-If it is not building, update to the latest npm temporarily with `npm install -g npm`, build and then install npm v6 again to run our own code.
+⚠️ If it is not building, update to the latest npm temporarily with `npm install -g npm`, build and then install npm v6 again to run our own code.
 
 Finally we can publish the package:
 
