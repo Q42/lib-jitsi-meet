@@ -68,6 +68,8 @@ npm install
 npm run build
 ```
 
+If it is not building, update to the latest npm temporarily with `npm install -g npm`, build and then install npm v6 again to run our own code.
+
 Finally we can publish the package:
 
 ```
