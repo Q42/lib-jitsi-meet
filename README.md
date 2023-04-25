@@ -74,7 +74,8 @@ And comment out lines below where the video.height and video.width is set to 999
             //     video.height = 99999;
             //     video.width = 99999;
             // }
-        }```
+        }
+```
 
 it hardcodes screensharing to 720p, jitsi is a config hell and this is the best option until they allow you to do from config (they do crazy config filtering for desktop)
 
